@@ -421,21 +421,24 @@ sulf_df_clean %>%
 # roughly balanced between regions
 ```
 
-## Should we log transform the responses?
+## Subject profiles
 
 ```{r}
 ## plot scatterplot of drug concentrations:
-pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
-op <- par(mfrow = c(1,2))
-with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
-                   main = "Pyrimethamine (raw)", xlab = "Day", ylab = "Concentration"))
-legend("topright", legend = levels(pyr_df$arm), pch = 16, col = seq_along(levels(pyr_df$arm)), bty = "n")
+pyr_df_clean$arm <- as.factor(pyr_df_clean$arm)
+sulf_df_clean$arm <- as.factor(sulf_df_clean$arm)
 
-with(sulf_df, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
-                   main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
-legend("topright", legend = levels(sulf_df$arm), pch = 16, col = seq_along(levels(sulf_df$arm)), bty = "n")
-par(op)
-dev.off()
+#pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
+#op <- par(mfrow = c(1,2))
+#with(pyr_df_clean,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
+#                   main = "Pyrimethamine (raw)", xlab = "Day", ylab = #"Concentration"))
+#legend("topright", legend = levels(pyr_df_clean$arm), pch = 16, col = #seq_along(levels(pyr_df_clean$arm)), bty = "n")
+
+#with(sulf_df_clean, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
+#                   main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
+#legend("topright", legend = levels(sulf_df_clean$arm), pch = 16, col = seq_along(levels(sulf_df_clean$arm)), bty = "n")
+#par(op)
+#dev.off()
 
 ## plot spaghetti plots of drug concentrations:
 # Pyrimethamine
@@ -459,34 +462,7 @@ g_sulf <- ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour
 ggsave("plots/sulf_time.pdf", plot = g_sulf, width = 6, height = 3)
 ```
 
-This pattern is very common in oral drug concentrations. There is an initial increase, then a sharp decline, followed by a steady decrease. This is known as a bi-phasic shape. For simplicity, we will begin by fitting an exponential function to model the decay. A biexponential could be more realistic- this is where two exponentials are fit to be able to account for the  difference in rates, but there may be identifiability issues, so we begin with the simpler model.
+# Model fitting
 
-There seems to be a difference between the treatments in both the intercept and slope. There does seem to be a difference in slopes in the sphagetti plots. In the scatterplots there is also some separation.
 
-There seems to be a difference in the spread of concentration levels. We may need to model residuals as being proportional to the concentration of the drug (i.e. fan out with the concentration). But we will first model errors as being constant, then check residuals vs fitted later on.
 
-Now what if we log transform the variables. Let's look at the spaghetti plots on the log scale:
-
-```{r}
-# Pyrimethamine
-g_pyr_log <- ggplot(pyr_df_clean, aes(pday, log(Pyrconcentration), group = pid, colour = arm)) +
-  geom_line(alpha = 0.25, linewidth = 0.4) +
-  facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Pyrimethamine concentration on the log scale",
-       x = "Day", y = "log Concentration") +
-  theme_minimal() +
-  theme(legend.position = "none")
-ggsave("plots/pyr_log.pdf", plot = g_pyr_log, width = 6, height = 3)
-
-# Sulfadoxine
-g_sulf_log <- ggplot(sulf_df_clean, aes(pday, log(Sulfconcentration), group = pid, colour = arm)) +
-  geom_line(alpha = 0.25, linewidth = 0.4) +
-  facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Sulfadoxine concentration on the log scale",
-       x = "Day", y = "log Concentration") +
-  theme_minimal() +
-  theme(legend.position = "none")
-ggsave("plots/sulf_log.pdf", plot = g_sulf_log, width = 6, height = 3)
-```
-
-We notice that these lines look relatively straight after the absorbtion phase, thus an exponential decay curve seems to be appropriate.
