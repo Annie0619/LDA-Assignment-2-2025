@@ -1,0 +1,190 @@
+---
+title: "Longitudinal Data Analysis Assignment 2"
+author: "Andomei Smit: SMTAND051"
+date: "01/09/2025"
+output:
+  bookdown::pdf_document2:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: true
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+library(nlme)
+library(faraway)
+library(lattice)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(MuMIn)
+```
+
+# Introduction
+
+```{r}
+# read in the data
+malaria <- read.csv("malariadata.csv")
+#head(malaria)
+
+# random sample carefully so that records stay complete
+set.seed(1997)
+# sample 75% of unique pids
+sampled_pids <- malaria %>%
+  distinct(pid) %>%
+  slice_sample(prop = 0.75) %>%
+  pull(pid)
+
+# keep all rows for those pids
+malaria <- malaria %>% semi_join(tibble(pid = sampled_pids), by = "pid")
+
+# order malaria by pid
+malaria <- malaria[order(malaria$pid, malaria$pday),]
+rm(sampled_pids)
+```
+
+# Data Cleaning
+
+```{r}
+# remove Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday
+malaria <- malaria %>% select(-c(Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday))
+
+# what columns are left
+colnames(malaria)
+
+# collapse the sites to north and south regions
+malaria <- malaria %>%
+  mutate(region = case_when(
+    site %in% c("Namaacha","Catuane","Boane") ~ "South",
+    site == "Magude" ~ "North",
+    TRUE ~ as.character(site)   # fallback in case of other sites
+  ))
+# drop site
+malaria <- malaria %>% select(-site)
+
+# missing values in responses: 
+colSums(is.na(malaria))
+
+# create two datasets for each drug (remove all NA rows of that drug):
+pyr_df  <- subset(malaria, !is.na(Pyrconcentration))
+sulf_df <- subset(malaria, !is.na(Sulfconcentration))
+
+
+# remove patients who have an increase in drug concentration after day 3
+pyr_bad_ids <- pyr_df %>%
+  filter(pday > 3) %>%
+  group_by(pid) %>%
+  arrange(pday) %>%
+  summarise(any_increase = any(diff(Pyrconcentration) > 0, na.rm = TRUE)) %>%
+  filter(any_increase) %>%
+  pull(pid)
+
+# Drop those patients
+pyr_df_clean <- pyr_df %>%
+  filter(!pid %in% pyr_bad_ids)
+
+# repeat for sulf
+sulf_bad_ids <- sulf_df %>%
+  filter(pday > 3) %>%
+  group_by(pid) %>%
+  arrange(pday) %>%
+  summarise(any_increase = any(diff(Sulfconcentration) > 0, na.rm = TRUE)) %>%
+  filter(any_increase) %>%
+  pull(pid)
+
+# Drop those patients
+sulf_df_clean <- sulf_df %>%
+  filter(!pid %in% sulf_bad_ids)
+
+# create grouped data:
+pyr_gd <- groupedData(Pyrconcentration ~ pday | region/pid,
+                      data  = pyr_df,
+                      outer = ~ arm)
+
+sulf_gd <- groupedData(Sulfconcentration ~ pday | region/pid,
+                       data  = sulf_df,
+                       outer = ~ arm)
+
+# create correct data types, center and scale covariates
+for(df in c("pyr_df","sulf_df")){
+  tmp <- get(df)
+  tmp$pid    <- factor(tmp$pid)
+  tmp$arm    <- factor(tmp$arm)           # consider setting baseline level = "SP"
+  tmp$gender <- factor(tmp$gender)
+  tmp$region <- factor(tmp$region)
+  tmp$pday   <- as.numeric(tmp$pday)
+
+  # center/scale continuous covariates (optional but helpful)
+  tmp$c_weight <- scale(tmp$weight, center=TRUE, scale=FALSE)
+  tmp$c_age    <- scale(tmp$age,    center=TRUE, scale=FALSE)
+
+  assign(df, tmp)
+}
+```
+
+# EDA
+
+```{r}
+# should we log transform the responses?
+## plot scatterplot of drug concentrations:
+op <- par(mfrow = c(1,2))
+with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
+                   main = "Pyrimethamine (raw)", xlab = "Day", ylab = "Concentration"))
+legend("topright", legend = levels(pyr_df$arm), pch = 16, col = seq_along(levels(pyr_df$arm)), bty = "n")
+
+with(sulf_df, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
+                   main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
+legend("topright", legend = levels(sulf_df$arm), pch = 16, col = seq_along(levels(sulf_df$arm)), bty = "n")
+par(op)
+
+## plot spaghetti plots of drug concentrations:
+# Pyrimethamine
+ggplot(pyr_df_clean, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
+  geom_line(alpha = 0.25, linewidth = 0.4) +
+  facet_wrap(~ arm, nrow = 1) +
+  labs(title = "Pyrimethamine — spaghetti by arm (raw scale)",
+       x = "Day", y = "Concentration") +
+  theme_minimal() + 
+  theme(legend.position = "none")
+
+# Sulfadoxine
+ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
+  geom_line(alpha = 0.25, linewidth = 0.4) +
+  facet_wrap(~ arm, nrow = 1) +
+  labs(title = "Sulfadoxine — spaghetti by arm (raw scale)",
+       x = "Day", y = "Concentration") +
+  theme_minimal() + 
+  theme(legend.position = "none")
+```
+
+This pattern is very common in oral drug concentrations. There is an initial increase, then a sharp decline, followed by a steady decrease. This is known as a bi-phasic shape. For simplicity, we will begin by fitting an exponential function to model the decay. A biexponential could be more realistic- this is where two exponentials are fit to be able to account for the  difference in rates, but there may be identifiability issues, so we begin with the simpler model.
+
+There seems to be a difference between the treatments in both the intercept and slope. There does seem to be a difference in slopes in the sphagetti plots. In the scatterplots there is also some separation.
+
+There seems to be a difference in the spread of concentration levels. We may need to model residuals as being proportional to the concentration of the drug (i.e. fan out with the concentration). But we will first model errors as being constant, then check residuals vs fitted later on.
+
+Now what if we log transform the variables. Let's look at the spaghetti plots on the log scale:
+
+```{r}
+# Pyrimethamine
+ggplot(pyr_df_clean, aes(pday, log(Pyrconcentration), group = pid, colour = arm)) +
+  geom_line(alpha = 0.25, linewidth = 0.4) +
+  facet_wrap(~ arm, nrow = 1) +
+  labs(title = "Pyrimethamine — spaghetti (log scale)",
+       x = "Day", y = "log Concentration") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Sulfadoxine
+ggplot(sulf_df_clean, aes(pday, log(Sulfconcentration), group = pid, colour = arm)) +
+  geom_line(alpha = 0.25, linewidth = 0.4) +
+  facet_wrap(~ arm, nrow = 1) +
+  labs(title = "Sulfadoxine — spaghetti (log scale)",
+       x = "Day", y = "log Concentration") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+We notice that these lines look relatively straight after the absorbtion phase, thus an exponential decay curve seems to be appropriate.
