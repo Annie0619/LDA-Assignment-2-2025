@@ -48,11 +48,19 @@ rm(sampled_pids)
 # Data Cleaning
 
 ```{r}
+unique(malaria$Studyyear) # all 2003, can drop it!
+unique(malaria$country) # all Mozambique, so can drop it!
+
 # remove Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday
 malaria <- malaria %>% select(-c(Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday))
 
 # what columns are left
 colnames(malaria)
+
+# how many subjects per site?
+malaria %>%
+  distinct(pid, site) %>%     # ensure one row per subject–site
+  count(site, name = "n_subjects")
 
 # collapse the sites to north and south regions
 malaria <- malaria %>%
@@ -126,8 +134,224 @@ for(df in c("pyr_df","sulf_df")){
 
 # EDA
 
+## Correlation checks
+
 ```{r}
-# should we log transform the responses?
+# correlation between age and weight
+cor(pyr_df_clean$age, pyr_df_clean$weight, use="complete.obs") # very high
+cor(sulf_df_clean$age, sulf_df_clean$weight, use="complete.obs") # very high
+```
+
+## Specific questions
+
+```{r}
+# number of patients within each dataset
+length(unique(pyr_df_clean$pid)) # 245
+length(unique(sulf_df_clean$pid)) # 259
+length(unique(malaria$pid)) # 306
+```
+
+```{r}
+# are age and weight constant within patient?
+df_age_weight <- malaria %>%
+  group_by(pid) %>%
+  summarise(
+    n_age = n_distinct(age),
+    n_weight = n_distinct(weight)
+  ) %>%
+  # filter for only records where either age or weight has > 1 distinct values
+  filter(n_age > 1 | n_weight > 1)
+# empty data frame, thus age and weight are constant within patient
+rm(df_age_weight)
+```
+
+## Distribution of continuous covariates between regions and arm
+
+```{r}
+# begin by summarising the data at pid level
+# Subject-level reductions
+subjects <- malaria %>%
+  arrange(pid, pday) %>%
+  group_by(pid) %>%
+  summarise(
+    arm     = dplyr::first(na.omit(arm)),
+    region  = dplyr::first(na.omit(region)),
+    gender  = dplyr::first(na.omit(gender)),
+    age     = dplyr::first(na.omit(age)),  
+    weight  = dplyr::first(na.omit(weight)),
+    .groups = "drop"
+  )
+```
+
+```{r}
+# summarise age by region and arm
+var_to_plot <- "age"
+
+# Boxplots/violin by arm within each region
+p_age <- ggplot(subjects, aes(x = arm, y = .data[[var_to_plot]], fill = arm)) +
+  geom_violin(trim = FALSE, alpha = 0.25, na.rm = TRUE, color = NA) +
+  geom_boxplot(width = 0.2, outlier.shape = 21, na.rm = TRUE) +
+  facet_wrap(~ region, scales = "fixed") +
+  labs(x = "Arm", y = var_to_plot, title = paste("Distribution of", var_to_plot, "by Arm within Region")) +
+  theme_bw() + theme(legend.position = "none")
+
+ggsave("plots/age_dbn.pdf", plot = p_age, width = 5, height = 3)
+```
+
+```{r}
+var_to_plot <- "weight"
+
+# Boxplots/violin by arm within each region
+p_weight <- ggplot(subjects, aes(x = arm, y = .data[[var_to_plot]], fill = arm)) +
+  geom_violin(trim = FALSE, alpha = 0.25, na.rm = TRUE, color = NA) +
+  geom_boxplot(width = 0.2, outlier.shape = 21, na.rm = TRUE) +
+  facet_wrap(~ region, scales = "fixed") +
+  labs(x = "Arm", y = var_to_plot, title = paste("Distribution of", var_to_plot, "by Arm within Region")) +
+  theme_bw() + theme(legend.position = "none")
+
+ggsave("plots/weight_dbn.pdf", plot = p_weight, width = 5, height = 3)
+```
+
+## Dropout rate: pyr
+
+```{r}
+# time on study/ dropout pattern
+last_obs_pyr <- malaria %>%
+  filter(!is.na(Pyrconcentration)) %>%                 # only rows where Pyr is observed
+  group_by(pid) %>%
+  summarise(
+    last_pday = max(pday),               # last day observed for that pid
+    n_obs     = n(),                     # how many Pyr measurements they have
+    .groups = "drop"
+  )
+
+subjects <- malaria %>% distinct(pid, arm, region)
+
+# counts of last observed day by arm
+last_by_arm_pyr <- last_obs_pyr %>%
+  left_join(subjects, by = "pid") %>%
+  count(arm, last_pday, name = "n_subjects") %>%
+  tidyr::pivot_wider(names_from = arm, values_from = n_subjects, values_fill = 0)
+
+unique_days <- sort(unique(malaria$pday))
+
+retention <- dplyr::bind_rows(lapply(unique_days, function(d) {
+  last_obs_pyr %>%
+    left_join(subjects, by = "pid") %>%
+    group_by(arm) %>%
+    summarise(n_at_least_d = sum(!is.na(last_pday) & last_pday >= d), .groups = "drop") %>%
+    mutate(pday = d)
+}))
+
+
+p_ret_pyr <- ggplot(retention, aes(x = pday, y = n_at_least_d, color = arm)) +
+   geom_line(linewidth = 1) + 
+  geom_point() +
+   labs(y = "Subjects with Pyr observed ≥ day", title = "Retention over time by Arm")+
+  theme_bw()
+ggsave("plots/retention_arm_pyr.pdf", plot = p_ret_pyr, height = 3, width = 5)
+```
+
+## Dropout rate: sulf
+
+```{r}
+# time on study/ dropout pattern
+last_obs_sulf <- malaria %>%
+  filter(!is.na(Sulfconcentration)) %>%                 # only rows where Sulf is observed
+  group_by(pid) %>%
+  summarise(
+    last_pday = max(pday),               # last day observed for that pid
+    n_obs     = n(),                     # how many Sulf measurements they have
+    .groups = "drop"
+  )
+
+subjects <- malaria %>% distinct(pid, arm, region)
+
+# counts of last observed day by arm
+last_by_arm_sulf <- last_obs_sulf %>%
+  left_join(subjects, by = "pid") %>%
+  count(arm, last_pday, name = "n_subjects") %>%
+  tidyr::pivot_wider(names_from = arm, values_from = n_subjects, values_fill = 0)
+
+unique_days <- sort(unique(malaria$pday))
+
+retention <- dplyr::bind_rows(lapply(unique_days, function(d) {
+  last_obs_sulf %>%
+    left_join(subjects, by = "pid") %>%
+    group_by(arm) %>%
+    summarise(n_at_least_d = sum(!is.na(last_pday) & last_pday >= d), .groups = "drop") %>%
+    mutate(pday = d)
+}))
+
+
+p_ret_sulf <- ggplot(retention, aes(x = pday, y = n_at_least_d, color = arm)) +
+   geom_line(linewidth = 1) + 
+  geom_point() +
+   labs(y = "Subjects with Sulf observed ≥ day", title = "Retention over time by Arm")+
+  theme_bw()
+ggsave("plots/retention_arm_sulf.pdf", plot = p_ret_pyr, height = 3, width = 5)
+```
+
+## Pyr dataset questions
+
+```{r}
+# gender: are the males and females balanced?
+pyr_df_clean %>%
+  distinct(pid, gender) %>%   
+  filter(gender == "F") %>%
+  summarise(n_females = n())
+# 156 of 245, roughly 64%
+```
+
+```{r}
+# arm: are the treatments balanced?
+pyr_df_clean %>%
+  distinct(pid, arm) %>%   
+  filter(arm == "SP") %>%
+  summarise(n_SP = n())
+# 119 out of 245 is SP, thus roughly balanced according to treatment
+```
+
+```{r}
+# do both regions offer both treatments?
+pyr_df_clean %>%
+  group_by(region, arm) %>%
+  summarise(n_unique_pid = n_distinct(pid), .groups = "drop")
+# roughly balanced between regions
+```
+
+## Sulf dataset questions
+
+```{r}
+# gender: are the males and females balanced?
+sulf_df_clean %>%
+  distinct(pid, gender) %>%   
+  filter(gender == "F") %>%
+  summarise(n_females = n())
+# 157 of 259, roughly 60%
+```
+
+```{r}
+# arm: are the treatments balanced?
+sulf_df_clean %>%
+  distinct(pid, arm) %>%   
+  filter(arm == "SP") %>%
+  summarise(n_SP = n())
+# 130 out of 259 is SP, thus roughly balanced according to treatment
+```
+
+```{r}
+# do both regions offer both treatments?
+sulf_df_clean %>%
+  group_by(region, arm) %>%
+  summarise(n_unique_pid = n_distinct(pid), .groups = "drop")
+# roughly balanced between regions
+```
+
+## Should we log transform the responses?
+
+```{r}
+
 ## plot scatterplot of drug concentrations:
 op <- par(mfrow = c(1,2))
 with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
@@ -185,6 +409,6 @@ ggplot(sulf_df_clean, aes(pday, log(Sulfconcentration), group = pid, colour = ar
        x = "Day", y = "log Concentration") +
   theme_minimal() +
   theme(legend.position = "none")
-
 ```
+
 We notice that these lines look relatively straight after the absorbtion phase, thus an exponential decay curve seems to be appropriate.
