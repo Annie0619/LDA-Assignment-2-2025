@@ -247,10 +247,47 @@ retention <- dplyr::bind_rows(lapply(unique_days, function(d) {
 p_ret_pyr <- ggplot(retention, aes(x = pday, y = n_at_least_d, color = arm)) +
    geom_line(linewidth = 1) + 
   geom_point() +
-   labs(y = "Subjects with Pyr observed ≥ day", title = "Retention over time by Arm")+
+   labs(y = "Subjects with observed ≥ day", title = "Retention over time by Arm (Pyrimethamine)")+
   theme_bw()
 ggsave("plots/retention_arm_pyr.pdf", plot = p_ret_pyr, height = 3, width = 5)
 ```
+
+
+```{r}
+# retention by region
+last_obs <- malaria %>%
+  filter(!is.na(Pyrconcentration)) %>%
+  group_by(pid) %>%
+  summarise(last_pday = max(pday), .groups = "drop")
+
+# attach region info
+subjects <- malaria %>% distinct(pid, region)
+last_obs <- left_join(last_obs, subjects, by = "pid")
+
+unique_days <- sort(unique(malaria$pday))
+
+retention_region <- bind_rows(lapply(unique_days, function(d) {
+  last_obs %>%
+    group_by(region) %>%
+    summarise(
+      n_at_least_d = sum(!is.na(last_pday) & last_pday >= d),
+      .groups = "drop"
+    ) %>%
+    mutate(pday = d)
+}))
+
+p_ret_reg <- ggplot(retention_region, aes(x = pday, y = n_at_least_d, color = region)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(
+    x = "Day",
+    y = "Subjects with observed ≥ day",
+    title = "Retention over time by Region (Pyrimethamine)"
+  ) +
+  theme_bw()
+ggsave("plots/retention_region_pyr.pdf", plot = p_ret_reg, width = 5, height = 3)
+```
+
 
 ## Dropout rate: sulf
 
@@ -287,9 +324,45 @@ retention <- dplyr::bind_rows(lapply(unique_days, function(d) {
 p_ret_sulf <- ggplot(retention, aes(x = pday, y = n_at_least_d, color = arm)) +
    geom_line(linewidth = 1) + 
   geom_point() +
-   labs(y = "Subjects with Sulf observed ≥ day", title = "Retention over time by Arm")+
+   labs(y = "Subjects with observed ≥ day", title = "Retention over time by Arm (Sulfadoxine)")+
   theme_bw()
 ggsave("plots/retention_arm_sulf.pdf", plot = p_ret_pyr, height = 3, width = 5)
+```
+
+
+```{r}
+# retention by region
+last_obs <- malaria %>%
+  filter(!is.na(Sulfconcentration)) %>%
+  group_by(pid) %>%
+  summarise(last_pday = max(pday), .groups = "drop")
+
+# attach region info
+subjects <- malaria %>% distinct(pid, region)
+last_obs <- left_join(last_obs, subjects, by = "pid")
+
+unique_days <- sort(unique(malaria$pday))
+
+retention_region <- bind_rows(lapply(unique_days, function(d) {
+  last_obs %>%
+    group_by(region) %>%
+    summarise(
+      n_at_least_d = sum(!is.na(last_pday) & last_pday >= d),
+      .groups = "drop"
+    ) %>%
+    mutate(pday = d)
+}))
+
+p_ret_reg <- ggplot(retention_region, aes(x = pday, y = n_at_least_d, color = region)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(
+    x = "Day",
+    y = "Subjects with observed ≥ day",
+    title = "Retention over time by Region (Sulfadoxine)"
+  ) +
+  theme_bw()
+ggsave("plots/retention_region_sulf.pdf", plot = p_ret_reg, width = 5, height = 3)
 ```
 
 ## Pyr dataset questions
@@ -351,8 +424,8 @@ sulf_df_clean %>%
 ## Should we log transform the responses?
 
 ```{r}
-
 ## plot scatterplot of drug concentrations:
+pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
 op <- par(mfrow = c(1,2))
 with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
                    main = "Pyrimethamine (raw)", xlab = "Day", ylab = "Concentration"))
@@ -362,25 +435,28 @@ with(sulf_df, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer
                    main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
 legend("topright", legend = levels(sulf_df$arm), pch = 16, col = seq_along(levels(sulf_df$arm)), bty = "n")
 par(op)
+dev.off()
 
 ## plot spaghetti plots of drug concentrations:
 # Pyrimethamine
-ggplot(pyr_df_clean, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
+g_pyr <- ggplot(pyr_df_clean, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Pyrimethamine — spaghetti by arm (raw scale)",
+  labs(title = "Pyrimethamine concentration on the original scale",
        x = "Day", y = "Concentration") +
   theme_minimal() + 
   theme(legend.position = "none")
+ggsave("plots/pyr_time.pdf", plot = g_pyr, width = 6, height = 3)
 
 # Sulfadoxine
-ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
+g_sulf <- ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Sulfadoxine — spaghetti by arm (raw scale)",
+  labs(title = "Sulfadoxine concentration on the original scale",
        x = "Day", y = "Concentration") +
   theme_minimal() + 
   theme(legend.position = "none")
+ggsave("plots/sulf_time.pdf", plot = g_sulf, width = 6, height = 3)
 ```
 
 This pattern is very common in oral drug concentrations. There is an initial increase, then a sharp decline, followed by a steady decrease. This is known as a bi-phasic shape. For simplicity, we will begin by fitting an exponential function to model the decay. A biexponential could be more realistic- this is where two exponentials are fit to be able to account for the  difference in rates, but there may be identifiability issues, so we begin with the simpler model.
@@ -393,22 +469,24 @@ Now what if we log transform the variables. Let's look at the spaghetti plots on
 
 ```{r}
 # Pyrimethamine
-ggplot(pyr_df_clean, aes(pday, log(Pyrconcentration), group = pid, colour = arm)) +
+g_pyr_log <- ggplot(pyr_df_clean, aes(pday, log(Pyrconcentration), group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Pyrimethamine — spaghetti (log scale)",
+  labs(title = "Pyrimethamine concentration on the log scale",
        x = "Day", y = "log Concentration") +
   theme_minimal() +
   theme(legend.position = "none")
+ggsave("plots/pyr_log.pdf", plot = g_pyr_log, width = 6, height = 3)
 
 # Sulfadoxine
-ggplot(sulf_df_clean, aes(pday, log(Sulfconcentration), group = pid, colour = arm)) +
+g_sulf_log <- ggplot(sulf_df_clean, aes(pday, log(Sulfconcentration), group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Sulfadoxine — spaghetti (log scale)",
+  labs(title = "Sulfadoxine concentration on the log scale",
        x = "Day", y = "log Concentration") +
   theme_minimal() +
   theme(legend.position = "none")
+ggsave("plots/sulf_log.pdf", plot = g_sulf_log, width = 6, height = 3)
 ```
 
 We notice that these lines look relatively straight after the absorbtion phase, thus an exponential decay curve seems to be appropriate.
