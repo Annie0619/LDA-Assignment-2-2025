@@ -500,143 +500,95 @@ pyr_nls <- nlsList(
   na.action = na.omit,
   control  = nls.control(maxiter = 100, warnOnly = TRUE)
 )
-
-summary(pyr_nls)      # per-patient fit summaries, lots of NA!
-
-plot(intervals(pyr_nls))
 ```
 
-What if we try to keep only pid's whose estimates were not NA?
 
 ```{r}
-coef_nls <- try(coef(pyr_nls), silent = TRUE)
-ok <- rowSums(is.na(coef_nls)) == 0  # subjects with all 3 params
-good_pids <- rownames(coef_nls)[ok]
+# plot the confidence intervals of the estimates
+out <- summary(pyr_nls)
 
-length(good_pids)          # how many “good” subjects: 58
+cf_wide <- as.data.frame(out$coefficients)
+# drop all NA:
+cf_wide_noNA <- cf_wide[complete.cases(cf_wide), ]
+pid <- rownames(cf_wide_noNA)
 
-# now refit it with only these people:
-pyr_gd_good <- groupedData(Pyrconcentration ~ pday | pid,
-                           data = subset(pyr_df, pid %in% good_pids))
+# Helper to build a tidy df and plot for one parameter
+plot_param_ci <- function(df, est_col, se_col, title) {
+  d <- tibble(
+    pid    = rownames(df),
+    est    = df[[est_col]],
+    se     = df[[se_col]]
+  ) %>%
+    mutate(
+      lower = est - 1.96 * se,
+      upper = est + 1.96 * se,
+      width = upper - lower
+    ) %>%
+    arrange(desc(width))     # sort from widest to narrowest
+  
+  # Drop the top 20 widest
+  if (nrow(d) > 20) {
+    d <- d[-(1:20), ]
+  }
+  
+  ggplot(d, aes(x = reorder(pid, est), y = est, ymin = lower, ymax = upper)) +
+    geom_pointrange() +
+    coord_flip() +
+    theme_bw() +
+    labs(x = "Subject (pid)", y = "Estimate ± 95% CI", title = title)
+}
 
-pyr_nls_good <- nlsList(
-  Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
-  data      = pyr_gd_good,
-  na.action = na.omit,
-  control   = nls.control(maxiter = 100, warnOnly = TRUE)
-)
-summary(pyr_nls_good)
 
-plot(intervals(pyr_nls_good))
-intervals(pyr_nls_good)
-# MOM2004-187 looks bad- remove!
+# 1) lKe
+p_lKe <- plot_param_ci(cf_wide_noNA, "Estimate.lKe", "Std. Error.lKe", "lKe: per-subject estimates with 95% CI")
+p_lKe
+
+# 2) lKa
+p_lKa <- plot_param_ci(cf_wide_noNA, "Estimate.lKa", "Std. Error.lKa", "lKa: per-subject estimates with 95% CI")
+p_lKa
+
+# 3) lCl
+p_lCl <- plot_param_ci(cf_wide_noNA, "Estimate.lCl", "Std. Error.lCl", "lCl: per-subject estimates with 95% CI")
+p_lCl
 
 ```
-
-Retry fitting nlme
+Now fit an nlme.
 
 ```{r}
-try_1000 <- nlme(
-  pyr_nls_good,
-  control = nlmeControl(
-    pnlsTol = 0.1,    # looser PNLS tolerance often helps early iterations
-    msMaxIter = 300,  # mixed step iterations
-    msVerbose = TRUE  # print progress to see if it’s getting better
-  )
-)
-
-summary(try_1000)
-
-try_10000 <- nlme(
-  pyr_nls,                       # nlsList object
-  ## keep it simple early on
+pyr_nlme_base <- nlme(pyr_nls,                       
   random  = pdDiag(lKe + lKa ~ 1),
   method  = "REML"
 )
 
+# note the following causes convergence issues 
+#try <- nlme(pyr_nls,
+     #       random = lKe + lKa ~1,
+      #      method = "REML")
 # running lKa, lCl and lKe did not converge
 # removing lKa lead to singularities
 # removing lCl lead to immediate convergence
 # removing lKe still did not converge
 
-summary(try_10000)
+#summary(pyr_nlme_base)
+
+#VarCorr(try_10000)
+#hist(ranef(try_10000)[,1])# Empirical Bayes estimates per pid
+#hist(ranef(try_10000)[,2])
+
+#plot(augPred(try_10000))
+# First 10 patients
+#plot(augPred(try_10000), layout = c(4, 4), pages = 4)
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Why did so many fail?
 
 ```{r}
-## 1) Get per-subject starting values where available
-pyr_nls <- nlsList(
-  Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
-  data = pyr_gd,
-  na.action = na.omit,
-  control = nls.control(maxiter = 100, warnOnly = TRUE)
-)
+e <- resid(pyr_nlme_base, type = "normalized")
+f <- fitted(pyr_nlme_base)
 
-coef_nls <- try(coef(pyr_nls), silent = TRUE)
-
-## 2) Robust population starts from successful subjects
-good_mat <- coef_nls[complete.cases(coef_nls), , drop = FALSE]
-pop_start <- apply(good_mat, 2, median, na.rm = TRUE)  # c(lKe=..., lKa=..., lCl=...)
-
-## 3) Mixed-effects on ALL subjects using those fixed-effect starts
-##    (Diagonal random effects often helps early stability.)
-try_full <- nlme(
-  fixed = lKe + lKa + lCl ~ 1,
-  data  = pyr_gd,  # <- ALL subjects
-  random = lKe + lKa +lCl~1,
-  start = as.numeric(pop_start),
-  ## selfStart model as a 'model' argument:
-  model = Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
-  na.action = na.omit,
-  control = nlmeControl(
-    pnlsTol   = 0.1,
-    msMaxIter = 300,
-    msVerbose = TRUE
-  )
-)
-
-summary(try_full)
-intervals(try_full)
-
-df_all <- as.data.frame(pyr_gd)
-df_all$lKa_fixed <- pop_start["lKa"]
-
-## Fix lKa at the median and estimate random effects for lKe and lCl only
-try_full_fixKa <- nlme(
-  model  = Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa_fixed, lCl),
-  data   = df_all,
-  fixed  = lKe + lCl ~ 1,
-  random = lKe + lCl ~ 1 | pid,    # diagonal Σ_b
-  groups = ~ pid,                   # <- grouping goes here with pdMat
-  start  = c(lKe = pop_start["lKe"], lCl = pop_start["lCl"]),
-  control = nlmeControl(pnlsTol = 0.1, msMaxIter = 300, msVerbose = TRUE)
-)
-
-
+# QQ plot
+pdf("plots/qq_plot.pdf", width = 4, height = 4)
+qqnorm(e); qqline(e)
+dev.off()
 ```
+
+
 
