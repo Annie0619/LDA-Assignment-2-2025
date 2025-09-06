@@ -90,7 +90,7 @@ pyr_bad_ids <- pyr_df %>%
   pull(pid)
 
 # Drop those patients
-pyr_df_clean <- pyr_df %>%
+pyr_df <- pyr_df %>%
   filter(!pid %in% pyr_bad_ids)
 
 # repeat for sulf
@@ -103,15 +103,15 @@ sulf_bad_ids <- sulf_df %>%
   pull(pid)
 
 # Drop those patients
-sulf_df_clean <- sulf_df %>%
+sulf_df <- sulf_df %>%
   filter(!pid %in% sulf_bad_ids)
 
 # create grouped data:
-pyr_gd <- groupedData(Pyrconcentration ~ pday | region/pid,
+pyr_gd <- groupedData(Pyrconcentration ~ pday | pid,
                       data  = pyr_df,
                       outer = ~ arm)
 
-sulf_gd <- groupedData(Sulfconcentration ~ pday | region/pid,
+sulf_gd <- groupedData(Sulfconcentration ~ pday | pid,
                        data  = sulf_df,
                        outer = ~ arm)
 
@@ -138,16 +138,16 @@ for(df in c("pyr_df","sulf_df")){
 
 ```{r}
 # correlation between age and weight
-cor(pyr_df_clean$age, pyr_df_clean$weight, use="complete.obs") # very high
-cor(sulf_df_clean$age, sulf_df_clean$weight, use="complete.obs") # very high
+cor(pyr_df$age, pyr_df$weight, use="complete.obs") # very high
+cor(sulf_df$age, sulf_df$weight, use="complete.obs") # very high
 ```
 
 ## Specific questions
 
 ```{r}
 # number of patients within each dataset
-length(unique(pyr_df_clean$pid)) # 245
-length(unique(sulf_df_clean$pid)) # 259
+length(unique(pyr_df$pid)) # 245
+length(unique(sulf_df$pid)) # 259
 length(unique(malaria$pid)) # 306
 ```
 
@@ -369,7 +369,7 @@ ggsave("plots/retention_region_sulf.pdf", plot = p_ret_reg, width = 5, height = 
 
 ```{r}
 # gender: are the males and females balanced?
-pyr_df_clean %>%
+pyr_df %>%
   distinct(pid, gender) %>%   
   filter(gender == "F") %>%
   summarise(n_females = n())
@@ -378,7 +378,7 @@ pyr_df_clean %>%
 
 ```{r}
 # arm: are the treatments balanced?
-pyr_df_clean %>%
+pyr_df %>%
   distinct(pid, arm) %>%   
   filter(arm == "SP") %>%
   summarise(n_SP = n())
@@ -387,7 +387,7 @@ pyr_df_clean %>%
 
 ```{r}
 # do both regions offer both treatments?
-pyr_df_clean %>%
+pyr_df %>%
   group_by(region, arm) %>%
   summarise(n_unique_pid = n_distinct(pid), .groups = "drop")
 # roughly balanced between regions
@@ -397,7 +397,7 @@ pyr_df_clean %>%
 
 ```{r}
 # gender: are the males and females balanced?
-sulf_df_clean %>%
+sulf_df %>%
   distinct(pid, gender) %>%   
   filter(gender == "F") %>%
   summarise(n_females = n())
@@ -406,7 +406,7 @@ sulf_df_clean %>%
 
 ```{r}
 # arm: are the treatments balanced?
-sulf_df_clean %>%
+sulf_df %>%
   distinct(pid, arm) %>%   
   filter(arm == "SP") %>%
   summarise(n_SP = n())
@@ -415,7 +415,7 @@ sulf_df_clean %>%
 
 ```{r}
 # do both regions offer both treatments?
-sulf_df_clean %>%
+sulf_df %>%
   group_by(region, arm) %>%
   summarise(n_unique_pid = n_distinct(pid), .groups = "drop")
 # roughly balanced between regions
@@ -425,24 +425,24 @@ sulf_df_clean %>%
 
 ```{r}
 ## plot scatterplot of drug concentrations:
-pyr_df_clean$arm <- as.factor(pyr_df_clean$arm)
-sulf_df_clean$arm <- as.factor(sulf_df_clean$arm)
+pyr_df$arm <- as.factor(pyr_df$arm)
+sulf_df$arm <- as.factor(sulf_df$arm)
 
 #pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
 #op <- par(mfrow = c(1,2))
-#with(pyr_df_clean,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
+#with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
 #                   main = "Pyrimethamine (raw)", xlab = "Day", ylab = #"Concentration"))
-#legend("topright", legend = levels(pyr_df_clean$arm), pch = 16, col = #seq_along(levels(pyr_df_clean$arm)), bty = "n")
+#legend("topright", legend = levels(pyr_df$arm), pch = 16, col = #seq_along(levels(pyr_df$arm)), bty = "n")
 
-#with(sulf_df_clean, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
+#with(sulf_df, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
 #                   main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
-#legend("topright", legend = levels(sulf_df_clean$arm), pch = 16, col = seq_along(levels(sulf_df_clean$arm)), bty = "n")
+#legend("topright", legend = levels(sulf_df$arm), pch = 16, col = seq_along(levels(sulf_df$arm)), bty = "n")
 #par(op)
 #dev.off()
 
 ## plot spaghetti plots of drug concentrations:
 # Pyrimethamine
-g_pyr <- ggplot(pyr_df_clean, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
+g_pyr <- ggplot(pyr_df, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
   labs(title = "Pyrimethamine concentration on the original scale",
@@ -452,7 +452,7 @@ g_pyr <- ggplot(pyr_df_clean, aes(pday, Pyrconcentration, group = pid, colour = 
 ggsave("plots/pyr_time.pdf", plot = g_pyr, width = 6, height = 3)
 
 # Sulfadoxine
-g_sulf <- ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
+g_sulf <- ggplot(sulf_df, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
   labs(title = "Sulfadoxine concentration on the original scale",
@@ -462,7 +462,181 @@ g_sulf <- ggplot(sulf_df_clean, aes(pday, Sulfconcentration, group = pid, colour
 ggsave("plots/sulf_time.pdf", plot = g_sulf, width = 6, height = 3)
 ```
 
-# Model fitting
+```{r}
+rm(g_pyr)
+rm(g_sulf)
+rm(last_by_arm_pyr)
+rm(last_by_arm_sulf)
+rm(last_obs)
+rm(last_obs_pyr)
+rm(last_obs_sulf)
+rm(p_age)
+rm(p_ret_pyr)
+rm(p_ret_reg)
+rm(p_ret_sulf)
+rm(p_weight)
+rm(retention)
+rm(retention_region)
+rm(subjects)
+rm(tmp)
+rm(df)
+rm(pyr_bad_ids)
+rm(sulf_bad_ids)
+rm(unique_days)
+rm(var_to_plot)
+```
 
 
+# Model fitting: Pyr
+
+```{r}
+#  since we don't have a dose, we can just make the dose the same for everyone
+pyr_df$Dose_Pyr <- 1 
+pyr_gd <- groupedData(Pyrconcentration ~ pday | pid, data = pyr_df)
+
+pyr_nls <- nlsList(
+  Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
+  data     = pyr_gd,
+  na.action = na.omit,
+  control  = nls.control(maxiter = 100, warnOnly = TRUE)
+)
+
+summary(pyr_nls)      # per-patient fit summaries, lots of NA!
+
+plot(intervals(pyr_nls))
+```
+
+What if we try to keep only pid's whose estimates were not NA?
+
+```{r}
+coef_nls <- try(coef(pyr_nls), silent = TRUE)
+ok <- rowSums(is.na(coef_nls)) == 0  # subjects with all 3 params
+good_pids <- rownames(coef_nls)[ok]
+
+length(good_pids)          # how many “good” subjects: 58
+
+# now refit it with only these people:
+pyr_gd_good <- groupedData(Pyrconcentration ~ pday | pid,
+                           data = subset(pyr_df, pid %in% good_pids))
+
+pyr_nls_good <- nlsList(
+  Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
+  data      = pyr_gd_good,
+  na.action = na.omit,
+  control   = nls.control(maxiter = 100, warnOnly = TRUE)
+)
+summary(pyr_nls_good)
+
+plot(intervals(pyr_nls_good))
+intervals(pyr_nls_good)
+# MOM2004-187 looks bad- remove!
+
+```
+
+Retry fitting nlme
+
+```{r}
+try_1000 <- nlme(
+  pyr_nls_good,
+  control = nlmeControl(
+    pnlsTol = 0.1,    # looser PNLS tolerance often helps early iterations
+    msMaxIter = 300,  # mixed step iterations
+    msVerbose = TRUE  # print progress to see if it’s getting better
+  )
+)
+
+summary(try_1000)
+
+try_10000 <- nlme(
+  pyr_nls,                       # nlsList object
+  ## keep it simple early on
+  random  = pdDiag(lKe + lKa ~ 1),
+  method  = "REML"
+)
+
+# running lKa, lCl and lKe did not converge
+# removing lKa lead to singularities
+# removing lCl lead to immediate convergence
+# removing lKe still did not converge
+
+summary(try_10000)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Why did so many fail?
+
+```{r}
+## 1) Get per-subject starting values where available
+pyr_nls <- nlsList(
+  Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
+  data = pyr_gd,
+  na.action = na.omit,
+  control = nls.control(maxiter = 100, warnOnly = TRUE)
+)
+
+coef_nls <- try(coef(pyr_nls), silent = TRUE)
+
+## 2) Robust population starts from successful subjects
+good_mat <- coef_nls[complete.cases(coef_nls), , drop = FALSE]
+pop_start <- apply(good_mat, 2, median, na.rm = TRUE)  # c(lKe=..., lKa=..., lCl=...)
+
+## 3) Mixed-effects on ALL subjects using those fixed-effect starts
+##    (Diagonal random effects often helps early stability.)
+try_full <- nlme(
+  fixed = lKe + lKa + lCl ~ 1,
+  data  = pyr_gd,  # <- ALL subjects
+  random = lKe + lKa +lCl~1,
+  start = as.numeric(pop_start),
+  ## selfStart model as a 'model' argument:
+  model = Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
+  na.action = na.omit,
+  control = nlmeControl(
+    pnlsTol   = 0.1,
+    msMaxIter = 300,
+    msVerbose = TRUE
+  )
+)
+
+summary(try_full)
+intervals(try_full)
+
+df_all <- as.data.frame(pyr_gd)
+df_all$lKa_fixed <- pop_start["lKa"]
+
+## Fix lKa at the median and estimate random effects for lKe and lCl only
+try_full_fixKa <- nlme(
+  model  = Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa_fixed, lCl),
+  data   = df_all,
+  fixed  = lKe + lCl ~ 1,
+  random = lKe + lCl ~ 1 | pid,    # diagonal Σ_b
+  groups = ~ pid,                   # <- grouping goes here with pdMat
+  start  = c(lKe = pop_start["lKe"], lCl = pop_start["lCl"]),
+  control = nlmeControl(pnlsTol = 0.1, msMaxIter = 300, msVerbose = TRUE)
+)
+
+
+```
 
