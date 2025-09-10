@@ -505,6 +505,9 @@ pyr_nls <- nlsList(
   na.action = na.omit,
   control  = nls.control(maxiter = 100, warnOnly = TRUE)
 )
+
+pairs(pyr_nls, id = 0.1) # idea of the correlation between individual parameter estimates
+# appears to have very strong correlations between the parameter estimates
 ```
 
 
@@ -560,7 +563,7 @@ p_lCl
 
 ## Fit a basic nlme model
 
-Now fit an nlme.
+Now fit an nlme. Note that we use pdDiag, which specifies that the random effects are indepentent (i.e. the variance-covariance matrix is diagonal).
 
 ```{r}
 pyr_nlme_base <- nlme(pyr_nls,                       
@@ -572,6 +575,7 @@ pyr_nlme_base <- nlme(pyr_nls,
 #try <- nlme(pyr_nls,
      #       random = lKe + lKa ~1,
       #      method = "REML")
+
 # running lKa, lCl and lKe did not converge
 # removing lKa lead to singularities
 # removing lCl lead to immediate convergence
@@ -579,7 +583,8 @@ pyr_nlme_base <- nlme(pyr_nls,
 
 m0_REML <- pyr_nlme_base
 
-summary(m0_REML) # these look ok
+summary(m0_REML) # these look ok, but note high correlations between parameters
+# also note the very small standard deviation for lKa, indicating it could be removed
 VarCorr(m0_REML) # some are almost zero
 
 ## residual diagnostics
@@ -616,119 +621,77 @@ We will do some EDA to determine which covariates to test.
 - Currently the fixed effects are: fixed = lKe + lKa + lCl ~ 1.
 
 ### EDA
-
-First, prepare the dataset.
-```{r}
-# Data used in the model
-df <- as.data.frame(pyr_gd)
-
-# Observation-level diagnostics
-df$fit  <- fitted(m1_ML,  level = 1)
-df$res  <- resid(m1_ML,   type = "pearson", level = 1)
-
-# Subject-level random effects (EBE) for lKe
-re  <- ranef(m1_ML) %>% tibble::rownames_to_column("pid")
-colnames(re)[2] <- "b_lKe"   # rename the single RE column
-
-# Join EBEs back to each row (or keep subject-only in later steps)
-df  <- df %>% left_join(re, by = "pid")
-```
-
-Residuals vs fitted & time
+Residuals vs fitted 
 
 ```{r}
-# residuals vs fitted
-ggplot(df, aes(fit, res)) +
-  geom_point(alpha = 0.5) +
-  geom_smooth(se = FALSE) +
-  geom_hline(yintercept = 0, linetype = 2) +
-  labs(title = "Residuals vs Fitted", x = "Fitted", y = "Pearson residual")
-# weird shape
-
-# residuals vs time (pday)
-ggplot(df, aes(pday, res)) +
-  geom_point(alpha = 0.5) +
-  geom_smooth(se = FALSE) +
-  geom_hline(yintercept = 0, linetype = 2) +
-  labs(title = "Residuals vs Time", x = "pday", y = "Pearson residual")
-# larger variation at the start than the end
+plot(m1_ML, cex = 0.8, adj =-0.5)
 
 # residual QQ plot
 qqnorm(resid(m1_ML, type = "normalized")); qqline(resid(m1_ML, type = "normalized"))
 ## large deviations at tails
 ```
-
-Residuals vs continuous covariates (weight and age)
-
 ```{r}
-# Weight (centered)
-ggplot(df, aes(c_weight, res)) +
-  geom_point(alpha = 0.5) + geom_smooth(se = FALSE) +
-  labs(title = "Residuals vs c_weight")
-
-# Age (centered)
-ggplot(df, aes(c_age, res)) +
-  geom_point(alpha = 0.5) + geom_smooth(se = FALSE) +
-  labs(title = "Residuals vs c_age")
-
-# neither of these show systematic increase in residuals as covariate increase or any other pattern- not include
+# qqplot of random effects
+qqnorm(m1_ML, ~ ranef(.)) # seems to be normal
 ```
 
-Now test categorical covariates
+Now plot the random effect against each covariate.
 
 ```{r}
-# Ensure factors
-df <- df %>%
-  mutate(
-    gender = factor(gender),
-    arm    = factor(arm),
-    region = factor(region)
-  )
+## 1) Subject-level BLUP + covariates -------------------------------
+re    <- ranef(m1_ML) %>% as.data.frame()      # or m1_ML
+re_df <- tibble::rownames_to_column(re, "pid")
 
-# Boxplots by category (skip if var absent)
-ggplot(df, aes(gender, res)) + geom_boxplot() + labs(title = "Residuals by gender")
-# very tight boxplots with some potential outliers for females
+dat0  <- getData(m1_ML) %>% as.data.frame()
 
-ggplot(df, aes(arm, res)) + geom_boxplot() + labs(title = "Residuals by arm") # again very tight, potentially outliers
+dat_re <- dat0 %>% left_join(re_df, by = "pid")
 
-ggplot(df, aes(region, res)) + geom_boxplot() + labs(title = "Residuals by region") # same as above
-```
-Now look at random effects (at subject level) vs covariates
-
-```{r}
-# collapse to subject-level covariates (first non-missing per pid)
-subj <- df %>%
+# If your ranef column isn't named 'lKe', change it below
+subj <- dat_re %>%
   group_by(pid) %>%
   summarise(
-    b_lKe   = dplyr::first(b_lKe),
-    weight  = dplyr::first(na.omit(weight)),
-    c_weight= dplyr::first(na.omit(c_weight)),
-    age     = dplyr::first(na.omit(age)),
-    c_age   = dplyr::first(na.omit(c_age)),
-    gender  = dplyr::first(gender),
-    arm     = dplyr::first(arm),
-    region  = dplyr::first(region),
-    .groups = "drop"
+    b_lKe    = first(na.omit(lKe)),   # BLUP (random effect) for lKe
+    c_weight = first(na.omit(c_weight)),
+    c_age    = first(na.omit(c_age)),
+    gender   = first(na.omit(gender)),
+    arm      = first(na.omit(arm)),
+    region   = first(na.omit(region)),
+    .groups  = "drop"
   )
 
-# b_lKe vs continuous covariates
-ggplot(subj, aes(c_weight, b_lKe)) +
-  geom_point() + geom_smooth(se = FALSE) +
-  labs(title = "Subject RE (lKe) vs c_weight") # some curve!
+## 2) Continuous: BLUP vs c_weight / c_age --------------------------
+cont_long <- subj %>%
+  select(pid, b_lKe, c_weight, c_age) %>%
+  pivot_longer(cols = c(c_weight, c_age), names_to = "covar", values_to = "x") %>%
+  filter(!is.na(x), !is.na(b_lKe))
 
-ggplot(subj, aes(c_age, b_lKe)) +
-  geom_point() + geom_smooth(se = FALSE) +
-  labs(title = "Subject RE (lKe) vs c_age") # also some pattern
+p_cont <- ggplot(cont_long, aes(x = x, y = b_lKe)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~ covar, scales = "free_x") +
+  theme_bw() +
+  labs(title = "BLUP(lKe) vs continuous covariates",
+       x = "Covariate value", y = "BLUP: lKe")
+p_cont
 
-# b_lKe by categorical covariates
-ggplot(subj, aes(gender, b_lKe)) + geom_boxplot() +
-  labs(title = "Subject RE (lKe) by gender") # nothing really..
+## 3) Categorical: BLUP by gender / arm / region --------------------
+ggplot(filter(subj, !is.na(gender)),
+    aes(x = as.factor(gender), y = b_lKe)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  theme_bw() +
+  labs(title = "BLUP(lKe) by gender", x = "gender", y = "BLUP: lKe")
 
-ggplot(subj, aes(arm, b_lKe)) + geom_boxplot() +
-  labs(title = "Subject RE (lKe) by arm") # nothing really..
+ggplot(filter(subj, !is.na(arm)),
+    aes(x = as.factor(arm), y = b_lKe)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  theme_bw() +
+  labs(title = "BLUP(lKe) by arm", x = "arm", y = "BLUP: lKe")
 
-ggplot(subj, aes(region, b_lKe)) + geom_boxplot() +
-  labs(title = "Subject RE (lKe) by region") # nothing really..
+ggplot(filter(subj, !is.na(region)),
+        aes(x = as.factor(region), y = b_lKe)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  theme_bw() +
+  labs(title = "BLUP(lKe) by region", x = "region", y = "BLUP: lKe")
 ```
 
 ### Adding age and weight
@@ -821,6 +784,7 @@ anova(m3_ML, m4_ML)   # adding age^2 doesn't improve fit
 summary(m4_ML) # all are sigificant now
 VarCorr(m4_ML) # variance still shrunk for lKe
 ```
+
 Now refit with REML.
 
 ```{r}
@@ -854,5 +818,118 @@ lines(density(re[,1]), col = "blue", lwd = 2)
 ```
 
 
-Would changing the variance function help?
+## Check variance structure
+
+Do the residuals differ by arm, gender or region?
+```{r}
+## 1) Residuals and their subject IDs (exactly matches model rows)
+res <- resid(m4_ML, type = "normalized")                 # length = nobs(model)
+pid <- as.character(getGroups(m4_ML, level = 1))         # same length as res
+
+df_used <- data.frame(pid = pid, res = as.numeric(res))  # one row per used observation
+
+## 2) Subject-level covariates (take first non-missing per pid)
+covs <- as.data.frame(pyr_gd) %>%
+  group_by(pid) %>%
+  summarise(
+    arm    = first(na.omit(arm)),
+    region = first(na.omit(region)),
+    gender = first(na.omit(gender)),
+    .groups = "drop"
+  )
+
+## 3) Join residuals (row-level) to subject covariates (by pid)
+df_res <- df_used %>% left_join(covs, by = "pid")
+
+# Residuals by arm
+ggplot(df_res, aes(x = arm, y = res)) +
+  geom_boxplot() +
+  theme_bw() +
+  labs(title = "Residuals by arm", x = "Arm", y = "Normalized residuals")
+
+# Residuals by region
+ggplot(df_res, aes(x = region, y = res)) +
+  geom_boxplot() +
+  theme_bw() +
+  labs(title = "Residuals by region", x = "Region", y = "Normalized residuals")
+
+# Residuals by gender
+ggplot(df_res, aes(x = gender, y = res)) +
+  geom_boxplot() +
+  theme_bw() +
+  labs(title = "Residuals by gender", x = "Gender", y = "Normalized residuals")
+```
+No clear difference.
+
+## Correlation structures
+
+
+Would changing the correlation structure help?
+
+```{r}
+plot(ACF(m4_ML, maxLag =10), alpha = 0.05)
+```
+
+
+
+```{r}
+## Fit candidates (ML) ---------------------------------------------
+m_base <- m4_ML  # your current ML model (no correlation)
+
+m_car1 <- update(
+  m_base,
+  correlation = corCAR1(form = ~ pday | pid)  # continuous-time AR(1)
+)
+
+m_ar1  <- update(
+  m_base,
+  correlation = corARMA(p = 1, q = 0, form = ~ 1 | pid)  # discrete-time AR(2)
+)
+
+m_ma1  <- update(
+  m_base,
+  correlation = corARMA(p = 0, q = 1, form = ~ 1 | pid)  # discrete-time MA(2)
+)
+
+m_arma11 <- update(
+  m_base,
+  correlation = corARMA(p = 1, q = 1, form = ~ 1 | pid)  # discrete-time ARMA(1,1)
+)
+
+m_ar2  <- update(
+  m_base,
+  correlation = corARMA(p = 2, q = 0, form = ~ 1 | pid)  # discrete-time AR(2)
+)
+
+m_ma2  <- update(
+  m_base,
+  correlation = corARMA(p = 0, q = 2, form = ~ 1 | pid)  # discrete-time MA(2)
+)
+
+m_arma21 <- update(
+  m_base,
+  correlation = corARMA(p = 2, q = 1, form = ~ 1 | pid)  # discrete-time ARMA(2,1)
+)
+
+m_arma12 <- update(
+  m_base,
+  correlation = corARMA(p = 1, q = 2, form = ~ 1 | pid)  # discrete-time ARMA(1,2)
+)
+
+## Compare by AIC (not all are nested) -----------------------------
+AIC(m_base, m_car1, m_ar1, m_ma1, m_arma11,
+    m_ar2, m_ma2, m_arma12, m_arma21)
+
+## For nested pairs you can also do LRTs; e.g., base vs car1:
+anova(m_base, m_car1)  # cAR does not improve model fit
+
+## Check residual ACF again on the better models -------------------
+par(mfrow=c(2,2))
+plot(ACF(m_ar1,  maxLag = 10), alpha = 0.05, main = "AR(1)")
+plot(ACF(m_arma11,  maxLag = 10), alpha = 0.05, main = "ARMA(1,1)")
+plot(ACF(m_ar2,   maxLag = 10), alpha = 0.05, main = "AR(2)")
+plot(ACF(m_arma21,   maxLag = 10), alpha = 0.05, main = "ARMA(2,1)")
+par(mfrow=c(1,1))
+# none of these get rid of the autocorrelations, pointing to some other missfit
+```
 
