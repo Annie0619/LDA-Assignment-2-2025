@@ -489,10 +489,15 @@ rm(var_to_plot)
 
 # Model fitting: Pyr
 
+## Fit individual models
+
 ```{r}
 #  since we don't have a dose, we can just make the dose the same for everyone
 pyr_df$Dose_Pyr <- 1 
-pyr_gd <- groupedData(Pyrconcentration ~ pday | pid, data = pyr_df)
+# drop the all rows with NA in weight column:
+pyr_df_cc <- subset(as.data.frame(pyr_df), !is.na(weight))
+
+pyr_gd <- groupedData(Pyrconcentration ~ pday | pid, data = pyr_df_cc)
 
 pyr_nls <- nlsList(
   Pyrconcentration ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
@@ -552,6 +557,9 @@ p_lCl <- plot_param_ci(cf_wide_noNA, "Estimate.lCl", "Std. Error.lCl", "lCl: per
 p_lCl
 
 ```
+
+## Fit a basic nlme model
+
 Now fit an nlme.
 
 ```{r}
@@ -569,26 +577,282 @@ pyr_nlme_base <- nlme(pyr_nls,
 # removing lCl lead to immediate convergence
 # removing lKe still did not converge
 
-#summary(pyr_nlme_base)
+m0_REML <- pyr_nlme_base
 
-#VarCorr(try_10000)
-#hist(ranef(try_10000)[,1])# Empirical Bayes estimates per pid
-#hist(ranef(try_10000)[,2])
+summary(m0_REML) # these look ok
+VarCorr(m0_REML) # some are almost zero
 
-#plot(augPred(try_10000))
-# First 10 patients
-#plot(augPred(try_10000), layout = c(4, 4), pages = 4)
+## residual diagnostics
+par(mfrow = c(2,2))
+plot(m0_REML)   # residuals vs fitted by id
+qqnorm(m0_REML, ~ resid(.))  # residual normality, no clear fan shape
+plot(augPred(m0_REML), layout = c(4,4), pages = 1)  # quick VPC 
+par(mfrow = c(1,1))
+
+## quick checks for heteroscedasticity / time pattern
+res <- resid(m0_REML, type = "pearson")
+fit <- fitted(m0_REML)
+plot(fit, res); abline(h = 0, lty = 2) # fan-shape?
+plot(pyr_gd$pday, res); abline(h = 0, lty = 2) # serial pattern?
 ```
+We're going to make 2 changes:
+1. Switch to ML to be able to run likelihood ratio tests
+2. Remove lKa from the random effects due to tiny variance estimation (meaning it may be too complex for ML to evaluate with that included)
 
 ```{r}
-e <- resid(pyr_nlme_base, type = "normalized")
-f <- fitted(pyr_nlme_base)
+m1_ML <- update(
+  pyr_nlme_base,
+  method = "ML",
+  random = lKe ~ 1   # drop lKa RE; keep lKe RE only
+)
+summary(m1_ML)
+VarCorr(m1_ML) # the large residuals is apparently typical for PK data
+```
 
-# QQ plot
-pdf("plots/qq_plot.pdf", width = 4, height = 4)
-qqnorm(e); qqline(e)
-dev.off()
+## Adding covariates
+
+We will do some EDA to determine which covariates to test.
+
+- Currently the fixed effects are: fixed = lKe + lKa + lCl ~ 1.
+
+### EDA
+
+First, prepare the dataset.
+```{r}
+# Data used in the model
+df <- as.data.frame(pyr_gd)
+
+# Observation-level diagnostics
+df$fit  <- fitted(m1_ML,  level = 1)
+df$res  <- resid(m1_ML,   type = "pearson", level = 1)
+
+# Subject-level random effects (EBE) for lKe
+re  <- ranef(m1_ML) %>% tibble::rownames_to_column("pid")
+colnames(re)[2] <- "b_lKe"   # rename the single RE column
+
+# Join EBEs back to each row (or keep subject-only in later steps)
+df  <- df %>% left_join(re, by = "pid")
+```
+
+Residuals vs fitted & time
+
+```{r}
+# residuals vs fitted
+ggplot(df, aes(fit, res)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(title = "Residuals vs Fitted", x = "Fitted", y = "Pearson residual")
+# weird shape
+
+# residuals vs time (pday)
+ggplot(df, aes(pday, res)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(title = "Residuals vs Time", x = "pday", y = "Pearson residual")
+# larger variation at the start than the end
+
+# residual QQ plot
+qqnorm(resid(m1_ML, type = "normalized")); qqline(resid(m1_ML, type = "normalized"))
+## large deviations at tails
+```
+
+Residuals vs continuous covariates (weight and age)
+
+```{r}
+# Weight (centered)
+ggplot(df, aes(c_weight, res)) +
+  geom_point(alpha = 0.5) + geom_smooth(se = FALSE) +
+  labs(title = "Residuals vs c_weight")
+
+# Age (centered)
+ggplot(df, aes(c_age, res)) +
+  geom_point(alpha = 0.5) + geom_smooth(se = FALSE) +
+  labs(title = "Residuals vs c_age")
+
+# neither of these show systematic increase in residuals as covariate increase or any other pattern- not include
+```
+
+Now test categorical covariates
+
+```{r}
+# Ensure factors
+df <- df %>%
+  mutate(
+    gender = factor(gender),
+    arm    = factor(arm),
+    region = factor(region)
+  )
+
+# Boxplots by category (skip if var absent)
+ggplot(df, aes(gender, res)) + geom_boxplot() + labs(title = "Residuals by gender")
+# very tight boxplots with some potential outliers for females
+
+ggplot(df, aes(arm, res)) + geom_boxplot() + labs(title = "Residuals by arm") # again very tight, potentially outliers
+
+ggplot(df, aes(region, res)) + geom_boxplot() + labs(title = "Residuals by region") # same as above
+```
+Now look at random effects (at subject level) vs covariates
+
+```{r}
+# collapse to subject-level covariates (first non-missing per pid)
+subj <- df %>%
+  group_by(pid) %>%
+  summarise(
+    b_lKe   = dplyr::first(b_lKe),
+    weight  = dplyr::first(na.omit(weight)),
+    c_weight= dplyr::first(na.omit(c_weight)),
+    age     = dplyr::first(na.omit(age)),
+    c_age   = dplyr::first(na.omit(c_age)),
+    gender  = dplyr::first(gender),
+    arm     = dplyr::first(arm),
+    region  = dplyr::first(region),
+    .groups = "drop"
+  )
+
+# b_lKe vs continuous covariates
+ggplot(subj, aes(c_weight, b_lKe)) +
+  geom_point() + geom_smooth(se = FALSE) +
+  labs(title = "Subject RE (lKe) vs c_weight") # some curve!
+
+ggplot(subj, aes(c_age, b_lKe)) +
+  geom_point() + geom_smooth(se = FALSE) +
+  labs(title = "Subject RE (lKe) vs c_age") # also some pattern
+
+# b_lKe by categorical covariates
+ggplot(subj, aes(gender, b_lKe)) + geom_boxplot() +
+  labs(title = "Subject RE (lKe) by gender") # nothing really..
+
+ggplot(subj, aes(arm, b_lKe)) + geom_boxplot() +
+  labs(title = "Subject RE (lKe) by arm") # nothing really..
+
+ggplot(subj, aes(region, b_lKe)) + geom_boxplot() +
+  labs(title = "Subject RE (lKe) by region") # nothing really..
+```
+
+### Adding age and weight
+
+The only noticible interesting trends are for age and weight. So we will try to add these.
+
+- We can add weight as a fixed effect on lKe (our only random effect). Recall in this case that we are estimating the following parameters: lKe, lKa and lCl. We now want to specify how the covariates influence these parameters. So we do it as below to essentially say there is a population mean for lKe (~1, plus a slope on the weight)
+
+```{r}
+# Use centered weight
+# Intercepts from the converged base ML model (order: lKe, lKa, lCl)
+# get current fixed-effect starts (order: lKe, lKa, lCl)
+beta0 <- unname(fixef(m1_ML))
+
+# add linear + quadratic weight on lKe
+m2w_ML <- update(
+  m1_ML,
+  fixed = list(
+    lKe ~ 1 + c_weight + I(c_weight^2),
+    lKa ~ 1,
+    lCl ~ 1
+  ),
+  # starts: lKe_intercept, lKe_c_weight, lKe_c_weight^2, lKa_intercept, lCl_intercept
+  start = c(beta0[1], 0, 0, beta0[2], beta0[3])
+)
+
+# compare
+anova(m1_ML, m2w_ML) # highly significant
+summary(m2w_ML)
+```
+Now let's do age:
+
+```{r}
+# Add linear + quadratic age on lKe
+m2a_ML <- update(
+  m1_ML,
+  fixed = list(
+    lKe ~ 1 + c_age + I(c_age^2),
+    lKa ~ 1,
+    lCl ~ 1
+  ),
+  # start vector: lKe_intercept, lKe:c_age, lKe:c_age^2, lKa_intercept, lCl_intercept
+  start = c(beta0[1], 0, 0, beta0[2], beta0[3])
+)
+
+# Likelihood ratio test vs base
+anova(m1_ML, m2a_ML) # also significant
+summary(m2a_ML)
+```
+
+Now let's combine both into the same model.
+
+```{r}
+beta0 <- unname(fixef(m1_ML))
+
+m3_ML <- update(
+  m1_ML,
+  fixed = list(
+    lKe ~ 1 + c_weight + I(c_weight^2) + c_age + I(c_age^2),
+    lKa ~ 1,
+    lCl ~ 1
+  ),
+  # intercept, weight slope, weight^2, age slope, age^2, lKa intercept, lCl intercept
+  start = c(beta0[1], 0, 0, 0, 0, beta0[2], beta0[3])
+)
+
+anova(m1_ML, m3_ML)   # very significant.
+summary(m3_ML) # which are individually significant:
+## only I(c_age^2) does not seem significant
+
+VarCorr(m3_ML) # variance of lKe got smaller since we explained part of it.
+VarCorr(m1_ML)
+```
+Let's drop age^2:
+
+```{r}
+m4_ML <- update(
+  m1_ML,
+  fixed = list(
+    lKe ~ 1 + c_weight + I(c_weight^2) + c_age,
+    lKa ~ 1,
+    lCl ~ 1
+  ),
+  # start vector: intercept, weight slope, weight^2, age slope, lKa intercept, lCl intercept
+  start = c(beta0[1], 0, 0, 0, beta0[2], beta0[3])
+)
+
+anova(m1_ML, m4_ML)   # compare vs base: highly significant
+anova(m3_ML, m4_ML)   # adding age^2 doesn't improve fit
+summary(m4_ML) # all are sigificant now
+VarCorr(m4_ML) # variance still shrunk for lKe
+```
+Now refit with REML.
+
+```{r}
+m_final <- update(m4_ML, method = "REML")
+summary(m_final)
+VarCorr(m_final) # no negative variances, residual var increased, but variance of lKe decreased
+VarCorr(m1_ML)
+```
+Let's check diagnostics again:
+```{r}
+res <- resid(m_final, type = "normalized")  
+
+# Residual plots
+par(mfrow = c(1,2))
+plot(m_final)  # residuals vs fitted
+qqnorm(res, main = "QQ plot of residuals")
+qqline(res, col = "red", lwd = 2) 
+par(mfrow = c(1,1))
+
+hist(res, breaks = 20, prob = TRUE,
+     main = "Histogram of residuals", xlab = "Residuals")
+lines(density(res), col = "blue", lwd = 2)
+
+# Random effects (BLUPs) vs covariates
+re <- ranef(m_final)
+qqnorm(re[,1], main = "QQ plot of random effect (lKe)")
+qqline(re, col = "red", lwd = 2)
+hist(re[,1], breaks = 15, prob = TRUE,
+     main = "Histogram of random effect (lKe)", xlab = "lKe")
+lines(density(re[,1]), col = "blue", lwd = 2)
 ```
 
 
+Would changing the variance function help?
 
