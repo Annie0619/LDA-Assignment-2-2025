@@ -933,3 +933,127 @@ par(mfrow=c(1,1))
 # none of these get rid of the autocorrelations, pointing to some other missfit
 ```
 
+## Final consideration: log transform Pyr
+
+```{r}
+# Add small offset
+eps <- 1e-3
+pyr_df_cc$logPyr <- log(pyr_df_cc$Pyrconcentration + eps)
+hist(pyr_df_cc$logPyr)
+
+pyr_gd_log <- groupedData(logPyr ~ pday | pid, data = pyr_df_cc)
+
+pyr_nls_log <- nlsList(
+  logPyr ~ SSfol(Dose_Pyr, pday, lKe, lKa, lCl),
+  data      = pyr_gd_log,
+  na.action = na.omit,
+  control   = nls.control(maxiter = 100, warnOnly = TRUE)
+)
+
+# fit the base model:
+m_log0_ML <- nlme(
+  pyr_nls_log,
+  random = lKe + lKa + lCl ~ 1,
+  method  = "ML"
+)
+summary(m_log0_ML) 
+VarCorr(m_log0_ML)
+# random effects almost all zero, model likely overparameterized
+# drop to only lKe:
+
+m_log1_ML <- update(
+  m_log0_ML,
+  random = lKe ~ 1,
+  method  = "ML"
+)
+summary(m_log1_ML)
+# random effect still almost zero
+# let's try adding covariates anyways
+
+beta0 <- unname(fixef(m_log1_ML))  # starting values
+
+m_log_cov_ML <- update(
+  m_log1_ML,
+  fixed = list(
+    lKe ~ 1 + c_weight + I(c_weight^2) + c_age,
+    lKa ~ 1,
+    lCl ~ 1
+  ),
+  start = c(
+    beta0[1], 0, 0, 0,  # lKe intercept + slopes
+    beta0[2],           # lKa intercept
+    beta0[3]            # lCl intercept
+  )
+)
+summary(m_log_cov_ML)
+anova(m_log1_ML, m_log_cov_ML)
+# none of the covariates are significant!
+
+# refit the basic model with REML
+m_log_final <- update(m_log1_ML, method = "REML")
+summary(m_log_final)
+plot(m_log_final)
+
+qqnorm(resid(m_log_final, type = "normalized")); qqline(resid(m_log_final, type = "normalized"))
+
+hist(resid(m_log_final, type = "normalized"))
+
+AIC(m4_ML, m_log_final)
+```
+
+## Compare raw scale and log scale
+
+```{r}
+## --- Choose which models to compare (ML fits) ---
+m_raw <- m4_ML        # raw-scale ML model
+m_log <- m_log1_ML    # log-scale ML model
+
+## --- 1) AIC/BIC comparison table ---
+cmp <- data.frame(
+  model = c("Raw scale", "Log scale"),
+  AIC   = c(AIC(m_raw), AIC(m_log)),
+  BIC   = c(BIC(m_raw), BIC(m_log)),
+  nobs  = c(nobs(m_raw), nobs(m_log))
+)
+cmp[order(cmp$AIC), ]   # lower is better
+```
+
+```{r}
+## --- 2) Residual diagnostics side-by-side ---
+par(mfrow = c(2,3), mar = c(4,4,2,1))
+
+# RAW: residuals
+res_raw <- resid(m_raw, type = "normalized")
+fit_raw <- fitted(m_raw)
+plot(fit_raw, res_raw, main = "Raw: Residuals vs Fitted",
+     xlab = "Fitted", ylab = "Residuals"); abline(h=0, lty=2)
+qqnorm(res_raw, main = "Raw: QQ plot"); qqline(res_raw, col="red", lwd=2)
+hist(res_raw, breaks=20, prob=TRUE, main="Raw: Residuals hist", xlab="Residuals")
+lines(density(res_raw), lwd=2, col="blue")
+
+# LOG: residuals
+res_log <- resid(m_log, type = "normalized")
+fit_log <- fitted(m_log)
+plot(fit_log, res_log, main = "Log: Residuals vs Fitted",
+     xlab = "Fitted", ylab = "Residuals"); abline(h=0, lty=2)
+qqnorm(res_log, main = "Log: QQ plot"); qqline(res_log, col="red", lwd=2)
+hist(res_log, breaks=20, prob=TRUE, main="Log: Residuals hist", xlab="Residuals")
+lines(density(res_log), lwd=2, col="blue")
+
+par(mfrow = c(1,1))
+```
+
+
+```{r}
+## --- 3) Residual autocorrelation (ACF) comparison ---
+par(mfrow=c(1,2), mar=c(4,4,2,1))
+plot(ACF(m_raw, maxLag=10), alpha=0.05, main="Raw: residual ACF")
+plot(ACF(m_log, maxLag=10), alpha=0.05, main="Log: residual ACF")
+par(mfrow=c(1,1))
+```
+
+On the log scale, the model achieved lower AIC/BIC, suggesting improved fit. However, residual diagnostics (QQ plot with a central step, bimodal residual histogram, and large autocorrelations at later time points) indicated model misspecification and failure to capture subject-level heterogeneity. In contrast, the raw-scale model had higher AIC/BIC but more interpretable residual distributions and non-negligible random effects. Given this trade-off, we conclude that while the log scale may improve global fit, the raw scale provides a more realistic description of individual-level variability.
+
+
+
+
