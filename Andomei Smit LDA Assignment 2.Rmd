@@ -91,11 +91,6 @@ pyr_bad_ids <- pyr_df %>%
 pyr_df <- pyr_df %>%
   filter(!pid %in% pyr_bad_ids)
 
-# create grouped data:
-pyr_gd <- groupedData(Pyrconcentration ~ pday | pid,
-                      data  = pyr_df,
-                      outer = ~ arm)
-
 # create correct data types, center and scale covariates
 pyr_df$pid    <- factor(pyr_df$pid)
 pyr_df$arm    <- factor(pyr_df$arm) 
@@ -402,15 +397,17 @@ plot_param_ci <- function(df, est_col, se_col, title) {
 # 1) lKe
 p_lKe <- plot_param_ci(cf_wide_noNA, "Estimate.lKe", "Std. Error.lKe", "lKe: per-subject estimates with 95% CI")
 p_lKe
+ggsave("plots/ci_plot_lke.pdf", plot = p_lKe, width = 5, height = 3)
 
 # 2) lKa
 p_lKa <- plot_param_ci(cf_wide_noNA, "Estimate.lKa", "Std. Error.lKa", "lKa: per-subject estimates with 95% CI")
 p_lKa
+ggsave("plots/ci_plot_lka.pdf", plot = p_lKa, width = 5, height = 3)
 
 # 3) lCl
 p_lCl <- plot_param_ci(cf_wide_noNA, "Estimate.lCl", "Std. Error.lCl", "lCl: per-subject estimates with 95% CI")
 p_lCl
-
+ggsave("plots/ci_plot_lcl.pdf", plot = p_lCl, width = 5, height = 3)
 ```
 
 ## Fit a basic nlme model
@@ -440,18 +437,18 @@ summary(m0_REML) # these look ok, but note high correlations between parameters
 VarCorr(m0_REML) # some are almost zero
 
 ## residual diagnostics
-par(mfrow = c(2,2))
+pdf("plots/resid_vs_fitted_base.pdf", width = 4, height = 4)
+#par(mfrow = c(1,2))
 plot(m0_REML)   # residuals vs fitted by id
-qqnorm(m0_REML, ~ resid(.))  # residual normality, no clear fan shape
-plot(augPred(m0_REML), layout = c(4,4), pages = 1)  # quick VPC 
-par(mfrow = c(1,1))
-
-## quick checks for heteroscedasticity / time pattern
-res <- resid(m0_REML, type = "pearson")
-fit <- fitted(m0_REML)
-plot(fit, res); abline(h = 0, lty = 2) # fan-shape?
-plot(pyr_gd$pday, res); abline(h = 0, lty = 2) # serial pattern?
+dev.off()
+pdf("plots/qq_base.pdf", width = 4, height = 4)
+qqnorm(resid(m0_REML))  # residual normality, no clear fan shape
+qqline(resid(m0_REML))
+#plot(augPred(m0_REML), layout = c(4,4), pages = 1)  # quick VPC 
+dev.off()
+#par(mfrow = c(1,1))
 ```
+
 We're going to make 2 changes:
 1. Switch to ML to be able to run likelihood ratio tests
 2. Remove lKa from the random effects due to tiny variance estimation (meaning it may be too complex for ML to evaluate with that included)
@@ -482,6 +479,7 @@ plot(m1_ML, cex = 0.8, adj =-0.5)
 qqnorm(resid(m1_ML, type = "normalized")); qqline(resid(m1_ML, type = "normalized"))
 ## large deviations at tails
 ```
+
 ```{r}
 # qqplot of random effects
 qqnorm(m1_ML, ~ ranef(.)) # seems to be normal
