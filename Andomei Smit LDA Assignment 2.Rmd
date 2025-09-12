@@ -51,8 +51,8 @@ rm(sampled_pids)
 unique(malaria$Studyyear) # all 2003, can drop it!
 unique(malaria$country) # all Mozambique, so can drop it!
 
-# remove Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday
-malaria <- malaria %>% select(-c(Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday))
+# remove Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday and Sulfconcentration
+malaria <- malaria %>% select(-c(Studyyear, country, Hb, pardens, gamedens, PIoutcome, PIoutcomeday, Sulfconcentration))
 
 # what columns are left
 colnames(malaria)
@@ -75,10 +75,8 @@ malaria <- malaria %>% select(-site)
 # missing values in responses: 
 colSums(is.na(malaria))
 
-# create two datasets for each drug (remove all NA rows of that drug):
+# create new dataframe for Pyr with no NA:
 pyr_df  <- subset(malaria, !is.na(Pyrconcentration))
-sulf_df <- subset(malaria, !is.na(Sulfconcentration))
-
 
 # remove patients who have an increase in drug concentration after day 3
 pyr_bad_ids <- pyr_df %>%
@@ -93,43 +91,21 @@ pyr_bad_ids <- pyr_df %>%
 pyr_df <- pyr_df %>%
   filter(!pid %in% pyr_bad_ids)
 
-# repeat for sulf
-sulf_bad_ids <- sulf_df %>%
-  filter(pday > 3) %>%
-  group_by(pid) %>%
-  arrange(pday) %>%
-  summarise(any_increase = any(diff(Sulfconcentration) > 0, na.rm = TRUE)) %>%
-  filter(any_increase) %>%
-  pull(pid)
-
-# Drop those patients
-sulf_df <- sulf_df %>%
-  filter(!pid %in% sulf_bad_ids)
-
 # create grouped data:
 pyr_gd <- groupedData(Pyrconcentration ~ pday | pid,
                       data  = pyr_df,
                       outer = ~ arm)
 
-sulf_gd <- groupedData(Sulfconcentration ~ pday | pid,
-                       data  = sulf_df,
-                       outer = ~ arm)
-
 # create correct data types, center and scale covariates
-for(df in c("pyr_df","sulf_df")){
-  tmp <- get(df)
-  tmp$pid    <- factor(tmp$pid)
-  tmp$arm    <- factor(tmp$arm)           # consider setting baseline level = "SP"
-  tmp$gender <- factor(tmp$gender)
-  tmp$region <- factor(tmp$region)
-  tmp$pday   <- as.numeric(tmp$pday)
+pyr_df$pid    <- factor(pyr_df$pid)
+pyr_df$arm    <- factor(pyr_df$arm) 
+pyr_df$gender <- factor(pyr_df$gender)
+pyr_df$region <- factor(pyr_df$region)
+pyr_df$pday   <- as.numeric(pyr_df$pday)
 
-  # center/scale continuous covariates (optional but helpful)
-  tmp$c_weight <- scale(tmp$weight, center=TRUE, scale=FALSE)
-  tmp$c_age    <- scale(tmp$age,    center=TRUE, scale=FALSE)
-
-  assign(df, tmp)
-}
+# center/scale continuous covariates (optional but helpful)
+pyr_df$c_weight <- scale(pyr_df$weight, center=TRUE, scale=FALSE)
+pyr_df$c_age    <- scale(pyr_df$age,    center=TRUE, scale=FALSE)
 ```
 
 # EDA
@@ -139,15 +115,13 @@ for(df in c("pyr_df","sulf_df")){
 ```{r}
 # correlation between age and weight
 cor(pyr_df$age, pyr_df$weight, use="complete.obs") # very high
-cor(sulf_df$age, sulf_df$weight, use="complete.obs") # very high
 ```
 
 ## Specific questions
 
 ```{r}
-# number of patients within each dataset
+# number of patients within pyr
 length(unique(pyr_df$pid)) # 245
-length(unique(sulf_df$pid)) # 259
 length(unique(malaria$pid)) # 306
 ```
 
@@ -288,83 +262,6 @@ p_ret_reg <- ggplot(retention_region, aes(x = pday, y = n_at_least_d, color = re
 ggsave("plots/retention_region_pyr.pdf", plot = p_ret_reg, width = 5, height = 3)
 ```
 
-
-## Dropout rate: sulf
-
-```{r}
-# time on study/ dropout pattern
-last_obs_sulf <- malaria %>%
-  filter(!is.na(Sulfconcentration)) %>%                 # only rows where Sulf is observed
-  group_by(pid) %>%
-  summarise(
-    last_pday = max(pday),               # last day observed for that pid
-    n_obs     = n(),                     # how many Sulf measurements they have
-    .groups = "drop"
-  )
-
-subjects <- malaria %>% distinct(pid, arm, region)
-
-# counts of last observed day by arm
-last_by_arm_sulf <- last_obs_sulf %>%
-  left_join(subjects, by = "pid") %>%
-  count(arm, last_pday, name = "n_subjects") %>%
-  tidyr::pivot_wider(names_from = arm, values_from = n_subjects, values_fill = 0)
-
-unique_days <- sort(unique(malaria$pday))
-
-retention <- dplyr::bind_rows(lapply(unique_days, function(d) {
-  last_obs_sulf %>%
-    left_join(subjects, by = "pid") %>%
-    group_by(arm) %>%
-    summarise(n_at_least_d = sum(!is.na(last_pday) & last_pday >= d), .groups = "drop") %>%
-    mutate(pday = d)
-}))
-
-
-p_ret_sulf <- ggplot(retention, aes(x = pday, y = n_at_least_d, color = arm)) +
-   geom_line(linewidth = 1) + 
-  geom_point() +
-   labs(y = "Subjects with observed ≥ day", title = "Retention over time by Arm (Sulfadoxine)")+
-  theme_bw()
-ggsave("plots/retention_arm_sulf.pdf", plot = p_ret_pyr, height = 3, width = 5)
-```
-
-
-```{r}
-# retention by region
-last_obs <- malaria %>%
-  filter(!is.na(Sulfconcentration)) %>%
-  group_by(pid) %>%
-  summarise(last_pday = max(pday), .groups = "drop")
-
-# attach region info
-subjects <- malaria %>% distinct(pid, region)
-last_obs <- left_join(last_obs, subjects, by = "pid")
-
-unique_days <- sort(unique(malaria$pday))
-
-retention_region <- bind_rows(lapply(unique_days, function(d) {
-  last_obs %>%
-    group_by(region) %>%
-    summarise(
-      n_at_least_d = sum(!is.na(last_pday) & last_pday >= d),
-      .groups = "drop"
-    ) %>%
-    mutate(pday = d)
-}))
-
-p_ret_reg <- ggplot(retention_region, aes(x = pday, y = n_at_least_d, color = region)) +
-  geom_line(linewidth = 1) +
-  geom_point() +
-  labs(
-    x = "Day",
-    y = "Subjects with observed ≥ day",
-    title = "Retention over time by Region (Sulfadoxine)"
-  ) +
-  theme_bw()
-ggsave("plots/retention_region_sulf.pdf", plot = p_ret_reg, width = 5, height = 3)
-```
-
 ## Pyr dataset questions
 
 ```{r}
@@ -393,40 +290,11 @@ pyr_df %>%
 # roughly balanced between regions
 ```
 
-## Sulf dataset questions
-
-```{r}
-# gender: are the males and females balanced?
-sulf_df %>%
-  distinct(pid, gender) %>%   
-  filter(gender == "F") %>%
-  summarise(n_females = n())
-# 157 of 259, roughly 60%
-```
-
-```{r}
-# arm: are the treatments balanced?
-sulf_df %>%
-  distinct(pid, arm) %>%   
-  filter(arm == "SP") %>%
-  summarise(n_SP = n())
-# 130 out of 259 is SP, thus roughly balanced according to treatment
-```
-
-```{r}
-# do both regions offer both treatments?
-sulf_df %>%
-  group_by(region, arm) %>%
-  summarise(n_unique_pid = n_distinct(pid), .groups = "drop")
-# roughly balanced between regions
-```
-
 ## Subject profiles
 
 ```{r}
 ## plot scatterplot of drug concentrations:
 pyr_df$arm <- as.factor(pyr_df$arm)
-sulf_df$arm <- as.factor(sulf_df$arm)
 
 #pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
 #op <- par(mfrow = c(1,2))
@@ -445,47 +313,31 @@ sulf_df$arm <- as.factor(sulf_df$arm)
 g_pyr <- ggplot(pyr_df, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
   geom_line(alpha = 0.25, linewidth = 0.4) +
   facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Pyrimethamine concentration on the original scale",
+  labs(title = "Pyrimethamine concentration",
        x = "Day", y = "Concentration") +
   theme_minimal() + 
   theme(legend.position = "none")
 ggsave("plots/pyr_time.pdf", plot = g_pyr, width = 6, height = 3)
-
-# Sulfadoxine
-g_sulf <- ggplot(sulf_df, aes(pday, Sulfconcentration, group = pid, colour = arm)) +
-  geom_line(alpha = 0.25, linewidth = 0.4) +
-  facet_wrap(~ arm, nrow = 1) +
-  labs(title = "Sulfadoxine concentration on the original scale",
-       x = "Day", y = "Concentration") +
-  theme_minimal() + 
-  theme(legend.position = "none")
-ggsave("plots/sulf_time.pdf", plot = g_sulf, width = 6, height = 3)
 ```
 
 ```{r}
 rm(g_pyr)
-rm(g_sulf)
 rm(last_by_arm_pyr)
-rm(last_by_arm_sulf)
 rm(last_obs)
 rm(last_obs_pyr)
-rm(last_obs_sulf)
 rm(p_age)
 rm(p_ret_pyr)
 rm(p_ret_reg)
-rm(p_ret_sulf)
 rm(p_weight)
 rm(retention)
 rm(retention_region)
 rm(subjects)
-rm(tmp)
+rm(pyr_df)
 rm(df)
 rm(pyr_bad_ids)
-rm(sulf_bad_ids)
 rm(unique_days)
 rm(var_to_plot)
 ```
-
 
 # Model fitting: Pyr
 
@@ -859,10 +711,10 @@ ggplot(df_res, aes(x = gender, y = res)) +
   theme_bw() +
   labs(title = "Residuals by gender", x = "Gender", y = "Normalized residuals")
 ```
+
 No clear difference.
 
 ## Correlation structures
-
 
 Would changing the correlation structure help?
 
