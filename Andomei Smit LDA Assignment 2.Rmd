@@ -291,18 +291,6 @@ pyr_df %>%
 ## plot scatterplot of drug concentrations:
 pyr_df$arm <- as.factor(pyr_df$arm)
 
-#pdf("plots/scatter_drug_time.pdf", height = 4, width = 7)
-#op <- par(mfrow = c(1,2))
-#with(pyr_df,  plot(pday, Pyrconcentration,  pch = 16, cex = .6, col = as.integer(arm),
-#                   main = "Pyrimethamine (raw)", xlab = "Day", ylab = #"Concentration"))
-#legend("topright", legend = levels(pyr_df$arm), pch = 16, col = #seq_along(levels(pyr_df$arm)), bty = "n")
-
-#with(sulf_df, plot(pday, Sulfconcentration, pch = 16, cex = .6, col = as.integer(arm),
-#                   main = "Sulfadoxine (raw)", xlab = "Day", ylab = "Concentration"))
-#legend("topright", legend = levels(sulf_df$arm), pch = 16, col = seq_along(levels(sulf_df$arm)), bty = "n")
-#par(op)
-#dev.off()
-
 ## plot spaghetti plots of drug concentrations:
 # Pyrimethamine
 g_pyr <- ggplot(pyr_df, aes(pday, Pyrconcentration, group = pid, colour = arm)) +
@@ -460,7 +448,7 @@ m1_ML <- update(
   random = lKe ~ 1   # drop lKa RE; keep lKe RE only
 )
 summary(m1_ML)
-VarCorr(m1_ML) # the large residuals is apparently typical for PK data
+VarCorr(m1_ML)
 ```
 
 ## Adding covariates
@@ -490,15 +478,14 @@ dev.off()
 Now plot the random effect against each covariate.
 
 ```{r}
-## 1) Subject-level random effects + covariates -------------------------------
-re    <- ranef(m1_ML) %>% as.data.frame()      # or m1_ML
+## 1) Subject-level random effects + covariates 
+re    <- ranef(m1_ML) %>% as.data.frame()     
 re_df <- tibble::rownames_to_column(re, "pid")
 
 dat0  <- getData(m1_ML) %>% as.data.frame()
 
 dat_re <- dat0 %>% left_join(re_df, by = "pid")
 
-# If your ranef column isn't named 'lKe', change it below
 subj <- dat_re %>%
   group_by(pid) %>%
   summarise(
@@ -511,7 +498,7 @@ subj <- dat_re %>%
     .groups  = "drop"
   )
 
-## 2) Continuous: random effects vs c_weight / c_age --------------------------
+## 2) Continuous: random effects vs c_weight / c_age 
 cont_long <- subj %>%
   select(pid, b_lKe, c_weight, c_age) %>%
   pivot_longer(cols = c(c_weight, c_age), names_to = "covar", values_to = "x") %>%
@@ -527,7 +514,7 @@ p_cont <- ggplot(cont_long, aes(x = x, y = b_lKe)) +
 p_cont
 ggsave("plots/age_weight_lke.pdf", plot = p_cont, height = 3, width = 5)
 
-## 3) Categorical: BLUP by gender / arm / region --------------------
+## 3) Categorical: BLUP by gender / arm / region
 g_gender <- ggplot(filter(subj, !is.na(gender)),
     aes(x = as.factor(gender), y = b_lKe)) +
   geom_boxplot(outlier.alpha = 0.5) +
@@ -675,76 +662,122 @@ g_gender <- ggplot(df_res, aes(x = gender, y = res)) +
 ggsave("plots/residual_by_gender.pdf", plot = g_gender, height = 3, width = 3)
 ```
 
-No clear difference. 
+No clear difference. Does variance increase with weight?
+
+```{r}
+# Subject-level covariate: weight
+covs <- as.data.frame(pyr_gd) %>%
+  group_by(pid) %>%
+  summarise(
+    c_weight = first(na.omit(c_weight)),
+    .groups = "drop"
+  )
+
+# Join residuals to covariates
+df_res <- df_used %>% left_join(covs, by = "pid")
+
+# Plot residuals vs weight
+g_resid_weight <- ggplot(df_res, aes(x = c_weight, y = res)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  theme_bw() +
+  labs(
+    title = "Normalized residuals vs. weight",
+    x = "Weight",
+    y = "Normalized residuals"
+  )
+ggsave("plots/residual_by_weight.pdf", plot = g_resid_weight, height = 3, width = 3)
+```
+
 
 ## Correlation structures
 
 Would changing the correlation structure help?
 
 ```{r}
-plot(ACF(m4_ML, maxLag =10), alpha = 0.05)
+pdf("plots/acf_base_weights.pdf", height = 3, width = 4)
+plot(ACF(m_final, maxLag =10), alpha = 0.05)
+dev.off()
 ```
 
 
 
 ```{r}
-## Fit candidates (ML) ---------------------------------------------
-m_base <- m4_ML  # your current ML model (no correlation)
+## Fit candidates (ML) 
+m_base <- m_final  # current ML model (no correlation)
+# specify controls to use if needed:
+ctl <- lmeControl(maxIter = 2000, msMaxIter = 2000, tolerance = 1e-6)
 
 m_car1 <- update(
   m_base,
-  correlation = corCAR1(form = ~ pday | pid)  # continuous-time AR(1)
+  correlation = corCAR1(form = ~ pday | pid),  # continuous-time AR(1)
+  control = ctl
 )
 
 m_ar1  <- update(
   m_base,
-  correlation = corARMA(p = 1, q = 0, form = ~ 1 | pid)  # discrete-time AR(2)
+  correlation = corARMA(p = 1, q = 0, form = ~ 1 | pid),  # discrete-time AR(2)
+  control = ctl
 )
 
+# did not converge, even with changed controls:
 m_ma1  <- update(
   m_base,
-  correlation = corARMA(p = 0, q = 1, form = ~ 1 | pid)  # discrete-time MA(2)
+  correlation = corARMA(p = 0, q = 1, form = ~ 1 | pid),  # discrete-time MA(2)
+  control = ctl
 )
 
+# did not converge, even with changed controls:
 m_arma11 <- update(
   m_base,
-  correlation = corARMA(p = 1, q = 1, form = ~ 1 | pid)  # discrete-time ARMA(1,1)
+  correlation = corARMA(p = 1, q = 1, form = ~ 1 | pid),  # discrete-time ARMA(1,1)
+  control = ctl
 )
 
 m_ar2  <- update(
   m_base,
-  correlation = corARMA(p = 2, q = 0, form = ~ 1 | pid)  # discrete-time AR(2)
+  correlation = corARMA(p = 2, q = 0, form = ~ 1 | pid),  # discrete-time AR(2)
+  control = ctl
 )
 
 m_ma2  <- update(
   m_base,
-  correlation = corARMA(p = 0, q = 2, form = ~ 1 | pid)  # discrete-time MA(2)
+  correlation = corARMA(p = 0, q = 2, form = ~ 1 | pid),  # discrete-time MA(2)
+  control = ctl
 )
 
 m_arma21 <- update(
   m_base,
-  correlation = corARMA(p = 2, q = 1, form = ~ 1 | pid)  # discrete-time ARMA(2,1)
+  correlation = corARMA(p = 2, q = 1, form = ~ 1 | pid),  # discrete-time ARMA(2,1)
+  control = ctl
 )
 
 m_arma12 <- update(
   m_base,
-  correlation = corARMA(p = 1, q = 2, form = ~ 1 | pid)  # discrete-time ARMA(1,2)
+  correlation = corARMA(p = 1, q = 2, form = ~ 1 | pid),  # discrete-time ARMA(1,2)
+  control = ctl
 )
 
-## Compare by AIC (not all are nested) -----------------------------
-AIC(m_base, m_car1, m_ar1, m_ma1, m_arma11,
+## Compare by AIC
+AIC(m_base, m_car1, m_ar1,
     m_ar2, m_ma2, m_arma12, m_arma21)
 
-## For nested pairs you can also do LRTs; e.g., base vs car1:
+## For nested pairs do LRTs; 
 anova(m_base, m_car1)  # cAR does not improve model fit
 
-## Check residual ACF again on the better models -------------------
-par(mfrow=c(2,2))
+## Check residual ACF again on the better models 
 plot(ACF(m_ar1,  maxLag = 10), alpha = 0.05, main = "AR(1)")
-plot(ACF(m_arma11,  maxLag = 10), alpha = 0.05, main = "ARMA(1,1)")
+pdf("plots/acf_ar2.pdf", height = 3, width = 4)
 plot(ACF(m_ar2,   maxLag = 10), alpha = 0.05, main = "AR(2)")
+dev.off()
+pdf("plots/acf_ma2.pdf", height = 3, width = 4)
+plot(ACF(m_ma2,   maxLag = 10), alpha = 0.05, main = "MA(2)")
+dev.off()
+pdf("plots/acf_arma12.pdf", height = 3, width = 4)
+plot(ACF(m_arma12,   maxLag = 10), alpha = 0.05, main = "ARMA(1,2)")
+dev.off()
 plot(ACF(m_arma21,   maxLag = 10), alpha = 0.05, main = "ARMA(2,1)")
-par(mfrow=c(1,1))
+
 # none of these get rid of the autocorrelations, pointing to some other missfit
 ```
 
@@ -771,119 +804,82 @@ m_log0_ML <- nlme(
   random = lKe + lKa + lCl ~ 1,
   method  = "ML"
 )
-summary(m_log0_ML) 
-VarCorr(m_log0_ML)
-# random effects almost all zero, model likely overparameterized
+# this model did not converge with all three random effects
 # drop to only lKe:
 
-m_log1_ML <- update(
-  m_log0_ML,
+m_log1_ML <- nlme(
+  pyr_nls_log,
   random = lKe ~ 1,
   method  = "ML"
 )
 summary(m_log1_ML)
-# random effect still almost zero
+# random effect standard deviation almost zero
 # let's try adding covariates anyways
 
 beta0 <- unname(fixef(m_log1_ML))  # starting values
 
+# add same covariates as in the model without logging:
 m_log_cov_ML <- update(
   m_log1_ML,
   fixed = list(
-    lKe ~ 1 + c_weight + I(c_weight^2) + c_age,
+    lKe ~ 1 + c_weight + I(c_weight^2), 
     lKa ~ 1,
     lCl ~ 1
   ),
   start = c(
-    beta0[1], 0, 0, 0,  # lKe intercept + slopes
+    beta0[1], 0, 0,   # lKe intercept + slopes
     beta0[2],           # lKa intercept
     beta0[3]            # lCl intercept
   )
 )
-summary(m_log_cov_ML)
-anova(m_log1_ML, m_log_cov_ML)
-# none of the covariates are significant!
+summary(m_log_cov_ML) # none of the covariates are significant!
+anova(m_log1_ML, m_log_cov_ML) # p-val 0.96- should not add covariates
+
 
 # refit the basic model with REML
 m_log_final <- update(m_log1_ML, method = "REML")
-summary(m_log_final)
-plot(m_log_final)
+summary(m_log_final) # standard deviation of lke random effect almost zero!
 
+pdf("plots/resid_fitted_log.pdf", height = 4, width = 4)
+plot(m_log_final) # residuals very weird.. vertical lines at discrete points.
+dev.off()
+
+pdf("plots/qq_log.pdf", height = 4, width = 4)
 qqnorm(resid(m_log_final, type = "normalized")); qqline(resid(m_log_final, type = "normalized"))
+dev.off()
+# qq plot also very weird with sections of breaks and horizontal dots
 
-hist(resid(m_log_final, type = "normalized"))
+hist(resid(m_log_final, type = "normalized")) # very clear dual peaks
 
-AIC(m4_ML, m_log_final)
+AIC(m_final, m_log_final) # log model much lower AIC
 ```
 
-## Compare raw scale and log scale
+# Fitted prediction curves
 
 ```{r}
-## --- Choose which models to compare (ML fits) ---
-m_raw <- m4_ML        # raw-scale ML model
-m_log <- m_log1_ML    # log-scale ML model
+dat <- getData(m2w_ML) %>% as.data.frame()
 
-## --- 1) AIC/BIC comparison table ---
-cmp <- data.frame(
-  model = c("Raw scale", "Log scale"),
-  AIC   = c(AIC(m_raw), AIC(m_log)),
-  BIC   = c(BIC(m_raw), BIC(m_log)),
-  nobs  = c(nobs(m_raw), nobs(m_log))
-)
-cmp[order(cmp$AIC), ]   # lower is better
-```
+# Add fitted values: level=1 uses subject BLUPs, level=0 is population
+dat$fit_subj <- predict(m2w_ML, level = 1)
+dat$fit_pop  <- predict(m2w_ML, level = 0)
 
-```{r}
-## --- 2) Residual diagnostics side-by-side ---
-par(mfrow = c(2,3), mar = c(4,4,2,1))
-
-# RAW: residuals
-res_raw <- resid(m_raw, type = "normalized")
-fit_raw <- fitted(m_raw)
-plot(fit_raw, res_raw, main = "Raw: Residuals vs Fitted",
-     xlab = "Fitted", ylab = "Residuals"); abline(h=0, lty=2)
-qqnorm(res_raw, main = "Raw: QQ plot"); qqline(res_raw, col="red", lwd=2)
-hist(res_raw, breaks=20, prob=TRUE, main="Raw: Residuals hist", xlab="Residuals")
-lines(density(res_raw), lwd=2, col="blue")
-
-# LOG: residuals
-res_log <- resid(m_log, type = "normalized")
-fit_log <- fitted(m_log)
-plot(fit_log, res_log, main = "Log: Residuals vs Fitted",
-     xlab = "Fitted", ylab = "Residuals"); abline(h=0, lty=2)
-qqnorm(res_log, main = "Log: QQ plot"); qqline(res_log, col="red", lwd=2)
-hist(res_log, breaks=20, prob=TRUE, main="Log: Residuals hist", xlab="Residuals")
-lines(density(res_log), lwd=2, col="blue")
-
-par(mfrow = c(1,1))
+set.seed(70)
+some_ids <- sample(unique(dat$pid), 9)   # pick 16 to show
+g_fitted <- ggplot(filter(dat, pid %in% some_ids),
+       aes(pday, Pyrconcentration, colour = "Observed")) +
+  geom_point(alpha = 0.6, size = 1.2) +
+  geom_line(aes(y = fit_subj, colour = "Fitted (level=1)"),
+            linewidth = 0.7) +
+  scale_colour_manual(values = c("Observed" = "black", "Fitted (level=1)" = "steelblue")) +
+  theme_bw() + facet_wrap(~ pid, scales = "free_y") +
+  labs(x = "Time (days)", y = "Concentration", colour = NULL,
+       title = "Observed and fitted by subject (subset)")
+ggsave("plots/fitted_curves.pdf", plot = g_fitted, width = 7, height = 5)
 ```
 
 
-```{r}
-## --- 3) Residual autocorrelation (ACF) comparison ---
-par(mfrow=c(1,2), mar=c(4,4,2,1))
-plot(ACF(m_raw, maxLag=10), alpha=0.05, main="Raw: residual ACF")
-plot(ACF(m_log, maxLag=10), alpha=0.05, main="Log: residual ACF")
-par(mfrow=c(1,1))
-```
 
-On the log scale, the model achieved lower AIC/BIC, suggesting improved fit. However, residual diagnostics (QQ plot with a central step, bimodal residual histogram, and large autocorrelations at later time points) indicated model misspecification and failure to capture subject-level heterogeneity. In contrast, the raw-scale model had higher AIC/BIC but more interpretable residual distributions and non-negligible random effects. Given this trade-off, we conclude that while the log scale may improve global fit, the raw scale provides a more realistic description of individual-level variability.
 
-# Model checking
-
-```{r}
-hist(res, breaks = 20, prob = TRUE,
-     main = "Histogram of residuals", xlab = "Residuals")
-lines(density(res), col = "blue", lwd = 2)
-
-# Random effects (BLUPs) vs covariates
-re <- ranef(m_final)
-qqnorm(re[,1], main = "QQ plot of random effect (lKe)")
-qqline(re, col = "red", lwd = 2)
-hist(re[,1], breaks = 15, prob = TRUE,
-     main = "Histogram of random effect (lKe)", xlab = "lKe")
-lines(density(re[,1]), col = "blue", lwd = 2)
-```
 
 
 
