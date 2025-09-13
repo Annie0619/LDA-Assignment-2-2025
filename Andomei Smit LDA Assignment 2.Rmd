@@ -482,13 +482,15 @@ qqnorm(resid(m1_ML, type = "normalized")); qqline(resid(m1_ML, type = "normalize
 
 ```{r}
 # qqplot of random effects
+pdf("plots/qq_lke_base.pdf", width = 4, height = 3.5)
 qqnorm(m1_ML, ~ ranef(.)) # seems to be normal
+dev.off()
 ```
 
 Now plot the random effect against each covariate.
 
 ```{r}
-## 1) Subject-level BLUP + covariates -------------------------------
+## 1) Subject-level random effects + covariates -------------------------------
 re    <- ranef(m1_ML) %>% as.data.frame()      # or m1_ML
 re_df <- tibble::rownames_to_column(re, "pid")
 
@@ -500,7 +502,7 @@ dat_re <- dat0 %>% left_join(re_df, by = "pid")
 subj <- dat_re %>%
   group_by(pid) %>%
   summarise(
-    b_lKe    = first(na.omit(lKe)),   # BLUP (random effect) for lKe
+    b_lKe    = first(na.omit(lKe)),   # (random effect) for lKe
     c_weight = first(na.omit(c_weight)),
     c_age    = first(na.omit(c_age)),
     gender   = first(na.omit(gender)),
@@ -509,7 +511,7 @@ subj <- dat_re %>%
     .groups  = "drop"
   )
 
-## 2) Continuous: BLUP vs c_weight / c_age --------------------------
+## 2) Continuous: random effects vs c_weight / c_age --------------------------
 cont_long <- subj %>%
   select(pid, b_lKe, c_weight, c_age) %>%
   pivot_longer(cols = c(c_weight, c_age), names_to = "covar", values_to = "x") %>%
@@ -520,28 +522,33 @@ p_cont <- ggplot(cont_long, aes(x = x, y = b_lKe)) +
   geom_smooth(se = FALSE) +
   facet_wrap(~ covar, scales = "free_x") +
   theme_bw() +
-  labs(title = "BLUP(lKe) vs continuous covariates",
-       x = "Covariate value", y = "BLUP: lKe")
+  labs(title = "lKe vs continuous covariates",
+       x = "Covariate value", y = "lKe")
 p_cont
+ggsave("plots/age_weight_lke.pdf", plot = p_cont, height = 3, width = 5)
 
 ## 3) Categorical: BLUP by gender / arm / region --------------------
-ggplot(filter(subj, !is.na(gender)),
+g_gender <- ggplot(filter(subj, !is.na(gender)),
     aes(x = as.factor(gender), y = b_lKe)) +
   geom_boxplot(outlier.alpha = 0.5) +
   theme_bw() +
-  labs(title = "BLUP(lKe) by gender", x = "gender", y = "BLUP: lKe")
+  labs(title = "lKe by gender", x = "gender", y = "lKe")
+ggsave("plots/gender_lke.pdf", plot = g_gender, height = 3, width = 3)
 
-ggplot(filter(subj, !is.na(arm)),
+g_arm <- ggplot(filter(subj, !is.na(arm)),
     aes(x = as.factor(arm), y = b_lKe)) +
   geom_boxplot(outlier.alpha = 0.5) +
   theme_bw() +
-  labs(title = "BLUP(lKe) by arm", x = "arm", y = "BLUP: lKe")
+  labs(title = "lKe by arm", x = "arm", y = "lKe")
+ggsave("plots/arm_lke.pdf", plot = g_arm, height = 3, width = 3)
 
-ggplot(filter(subj, !is.na(region)),
+g_region <- ggplot(filter(subj, !is.na(region)),
         aes(x = as.factor(region), y = b_lKe)) +
   geom_boxplot(outlier.alpha = 0.5) +
   theme_bw() +
-  labs(title = "BLUP(lKe) by region", x = "region", y = "BLUP: lKe")
+  labs(title = "lKe by region", x = "region", y = "lKe")
+g_region
+ggsave("plots/region_lke.pdf", plot = g_region, height = 3, width = 3)
 ```
 
 ### Adding age and weight
@@ -592,89 +599,44 @@ anova(m1_ML, m2a_ML) # also significant
 summary(m2a_ML)
 ```
 
-Now let's combine both into the same model.
+Determine if we should keep age or weight.
 
 ```{r}
-beta0 <- unname(fixef(m1_ML))
+AIC(m2a_ML, m2w_ML)
+BIC(m2a_ML, m2w_ML)
 
-m3_ML <- update(
-  m1_ML,
-  fixed = list(
-    lKe ~ 1 + c_weight + I(c_weight^2) + c_age + I(c_age^2),
-    lKa ~ 1,
-    lCl ~ 1
-  ),
-  # intercept, weight slope, weight^2, age slope, age^2, lKa intercept, lCl intercept
-  start = c(beta0[1], 0, 0, 0, 0, beta0[2], beta0[3])
-)
-
-anova(m1_ML, m3_ML)   # very significant.
-summary(m3_ML) # which are individually significant:
-## only I(c_age^2) does not seem significant
-
-VarCorr(m3_ML) # variance of lKe got smaller since we explained part of it.
+VarCorr(m2w_ML) # variance of lKe got smaller since we explained part of it.
 VarCorr(m1_ML)
-```
-Let's drop age^2:
-
-```{r}
-m4_ML <- update(
-  m1_ML,
-  fixed = list(
-    lKe ~ 1 + c_weight + I(c_weight^2) + c_age,
-    lKa ~ 1,
-    lCl ~ 1
-  ),
-  # start vector: intercept, weight slope, weight^2, age slope, lKa intercept, lCl intercept
-  start = c(beta0[1], 0, 0, 0, beta0[2], beta0[3])
-)
-
-anova(m1_ML, m4_ML)   # compare vs base: highly significant
-anova(m3_ML, m4_ML)   # adding age^2 doesn't improve fit
-summary(m4_ML) # all are sigificant now
-VarCorr(m4_ML) # variance still shrunk for lKe
 ```
 
 Now refit with REML.
 
 ```{r}
-m_final <- update(m4_ML, method = "REML")
+m_final <- update(m2w_ML, method = "REML")
 summary(m_final)
 VarCorr(m_final) # no negative variances, residual var increased, but variance of lKe decreased
-VarCorr(m1_ML)
 ```
 Let's check diagnostics again:
 ```{r}
 res <- resid(m_final, type = "normalized")  
 
 # Residual plots
-par(mfrow = c(1,2))
+pdf("plots/resid_fitted_base_weight.pdf", width = 4, height = 4)
 plot(m_final)  # residuals vs fitted
+dev.off()
+pdf("plots/qq_base_weight.pdf", width = 4, height = 4)
 qqnorm(res, main = "QQ plot of residuals")
-qqline(res, col = "red", lwd = 2) 
-par(mfrow = c(1,1))
-
-hist(res, breaks = 20, prob = TRUE,
-     main = "Histogram of residuals", xlab = "Residuals")
-lines(density(res), col = "blue", lwd = 2)
-
-# Random effects (BLUPs) vs covariates
-re <- ranef(m_final)
-qqnorm(re[,1], main = "QQ plot of random effect (lKe)")
-qqline(re, col = "red", lwd = 2)
-hist(re[,1], breaks = 15, prob = TRUE,
-     main = "Histogram of random effect (lKe)", xlab = "lKe")
-lines(density(re[,1]), col = "blue", lwd = 2)
+qqline(res, lwd = 2) 
+dev.off()
 ```
-
 
 ## Check variance structure
 
 Do the residuals differ by arm, gender or region?
 ```{r}
 ## 1) Residuals and their subject IDs (exactly matches model rows)
-res <- resid(m4_ML, type = "normalized")                 # length = nobs(model)
-pid <- as.character(getGroups(m4_ML, level = 1))         # same length as res
+res <- resid(m_final, type = "normalized")                 # length = nobs(model)
+pid <- as.character(getGroups(m_final, level = 1))         # same length as res
 
 df_used <- data.frame(pid = pid, res = as.numeric(res))  # one row per used observation
 
@@ -692,25 +654,28 @@ covs <- as.data.frame(pyr_gd) %>%
 df_res <- df_used %>% left_join(covs, by = "pid")
 
 # Residuals by arm
-ggplot(df_res, aes(x = arm, y = res)) +
+g_arm <- ggplot(df_res, aes(x = arm, y = res)) +
   geom_boxplot() +
   theme_bw() +
   labs(title = "Residuals by arm", x = "Arm", y = "Normalized residuals")
+ggsave("plots/residual_by_arm.pdf", plot = g_arm, height = 3, width = 3)
 
 # Residuals by region
-ggplot(df_res, aes(x = region, y = res)) +
+g_region <- ggplot(df_res, aes(x = region, y = res)) +
   geom_boxplot() +
   theme_bw() +
   labs(title = "Residuals by region", x = "Region", y = "Normalized residuals")
+ggsave("plots/residual_by_region.pdf", plot = g_region, height = 3, width = 3)
 
 # Residuals by gender
-ggplot(df_res, aes(x = gender, y = res)) +
+g_gender <- ggplot(df_res, aes(x = gender, y = res)) +
   geom_boxplot() +
   theme_bw() +
   labs(title = "Residuals by gender", x = "Gender", y = "Normalized residuals")
+ggsave("plots/residual_by_gender.pdf", plot = g_gender, height = 3, width = 3)
 ```
 
-No clear difference.
+No clear difference. 
 
 ## Correlation structures
 
@@ -904,6 +869,21 @@ par(mfrow=c(1,1))
 
 On the log scale, the model achieved lower AIC/BIC, suggesting improved fit. However, residual diagnostics (QQ plot with a central step, bimodal residual histogram, and large autocorrelations at later time points) indicated model misspecification and failure to capture subject-level heterogeneity. In contrast, the raw-scale model had higher AIC/BIC but more interpretable residual distributions and non-negligible random effects. Given this trade-off, we conclude that while the log scale may improve global fit, the raw scale provides a more realistic description of individual-level variability.
 
+# Model checking
+
+```{r}
+hist(res, breaks = 20, prob = TRUE,
+     main = "Histogram of residuals", xlab = "Residuals")
+lines(density(res), col = "blue", lwd = 2)
+
+# Random effects (BLUPs) vs covariates
+re <- ranef(m_final)
+qqnorm(re[,1], main = "QQ plot of random effect (lKe)")
+qqline(re, col = "red", lwd = 2)
+hist(re[,1], breaks = 15, prob = TRUE,
+     main = "Histogram of random effect (lKe)", xlab = "lKe")
+lines(density(re[,1]), col = "blue", lwd = 2)
+```
 
 
 
